@@ -62,7 +62,7 @@ const st={
   custom_order:ldj("lt_order",null),
   day_end_points:ldj("lt_day_ends",{}),
   schedule:[],hotels_by_day:{},day_calendar:{},weather_by_day:{},osrm_by_day:{},
-  sel_day:1,search:"",status_filter:"all",
+  sel_day:1,search:"",status_filter:"all",edit_mode:false,
   checkins:ldj("lt_ci",{}),
   visit_history:ldj("lt_history",{}),
   mode:MODES[initMode]?initMode:"xemay",
@@ -120,10 +120,12 @@ function renderMap(){
       .addTo(lmap);
     lmarkers.push(sm); pts.push([s0.lat,s0.lon]);
   }
+  const osrmTimes=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?getDisplayTimesForDay(st.sel_day,stops):{};
   stops.forEach(s=>{
     const ci=getCI(s.name);
+    const dt=osrmTimes[s.stt]||{arriveTime:s.arriveTime,departTime:s.departTime,overtime:s.overtime};
     const m=L.marker([s.lat,s.lon],{icon:mkIcon(s.stt,"#0f4c81",!!ci)})
-      .bindPopup(`<strong>#${s.stt} ${escHtml(s.name)}</strong><br/>${escHtml(s.province)} · Ngày ${s.day}<br/>⏰ ${escHtml(s.arriveTime)}–${escHtml(s.departTime)}${s.overtime?" ⚠️ Quá giờ":""}<br/>📍 +${(s.distKm||0).toFixed(1)} km${ci?.note?`<br/>📝 ${escHtml(ci.note)}`:""}<br/><a class="popup-nav" href="${navUrl(s)}" target="_blank">🧭 Chỉ đường Google Maps</a>`)
+      .bindPopup(`<strong>#${s.stt} ${escHtml(s.name)}</strong><br/>${escHtml(s.province)} · Ngày ${s.day}<br/>⏰ ${escHtml(dt.arriveTime)}–${escHtml(dt.departTime)}${dt.overtime?" ⚠️ Quá giờ":""}${ci?.note?`<br/>📝 ${escHtml(ci.note)}`:""}<br/><a class="popup-nav" href="${navUrl(s)}" target="_blank">🧭 Chỉ đường Google Maps</a>`)
       .addTo(lmap);
     lmarkers.push(m); lmarkerByStt[s.stt]=m; pts.push([s.lat,s.lon]);
   });
@@ -167,7 +169,7 @@ function toggleMapExpand(){
   setTimeout(()=>lmap.invalidateSize(),220);
 }
 
-// ── GPS & Live Tracking (có kiểm tra HTTPS) ────────────────
+// ── GPS Thông Minh (1 nút gộp Định vị + Live Tracking) ──────
 function checkSecureForGPS(){
   if(!window.isSecureContext && location.hostname!=="localhost" && location.hostname!=="127.0.0.1"){
     return "GPS chỉ hoạt động khi mở trang qua HTTPS (ví dụ GitHub Pages) hoặc localhost.";
@@ -196,46 +198,35 @@ function updateMyPosMarker(pos,fly=false){
   if(fly){lmap.flyTo([pos.lat,pos.lon],13,{duration:.6});myPosMarker.openPopup();}
 }
 
-async function locateMeOnMap(){
+async function smartGPSBtn(){
+  const btn=document.getElementById("btn-smart-gps");
+  if(st.live_watch_id!==null){
+    navigator.geolocation.clearWatch(st.live_watch_id);
+    st.live_watch_id=null;
+    btn.classList.remove("live");
+    document.getElementById("near-banner").classList.remove("show");
+    toast("📍 Đã tắt theo dõi vị trí liên tục");
+    return;
+  }
+  const secErr=checkSecureForGPS();
+  if(secErr){alert(secErr);return;}
   try{
     const pos=await getGPS();
     updateMyPosMarker(pos,true);
     checkNearbyStop();
     renderUI();
+    btn.classList.add("live");
+    toast("📍 Đang theo dõi GPS trực tiếp (chạm lại để tắt)");
+    st.live_watch_id=navigator.geolocation.watchPosition(
+      p=>{
+        updateMyPosMarker({lat:p.coords.latitude,lon:p.coords.longitude},false);
+        checkNearbyStop();
+        renderUI();
+      },
+      ()=>{},
+      {enableHighAccuracy:true,maximumAge:15000,timeout:15000}
+    );
   }catch(err){alert(err.message);}
-}
-
-function toggleLiveGPS(){
-  const btn=document.getElementById("btn-live-gps");
-  if(st.live_watch_id!==null){
-    navigator.geolocation.clearWatch(st.live_watch_id);
-    st.live_watch_id=null;
-    btn.classList.remove("active");
-    document.getElementById("near-banner").classList.remove("show");
-    toast("🛰️ Đã tắt theo dõi vị trí liên tục");
-    return;
-  }
-  const secErr=checkSecureForGPS();
-  if(secErr){alert(secErr);return;}
-  btn.classList.add("active");
-  toast("🛰️ Đang bật theo dõi GPS liên tục...");
-  st.live_watch_id=navigator.geolocation.watchPosition(
-    p=>{
-      const pos={lat:p.coords.latitude,lon:p.coords.longitude};
-      updateMyPosMarker(pos,false);
-      checkNearbyStop();
-      renderUI();
-    },
-    err=>{
-      if(err.code===1){
-        navigator.geolocation.clearWatch(st.live_watch_id);
-        st.live_watch_id=null;
-        btn.classList.remove("active");
-        alert("Bạn chưa cấp quyền vị trí GPS cho trình duyệt.");
-      }
-    },
-    {enableHighAccuracy:true,maximumAge:15000,timeout:15000}
-  );
 }
 
 function checkNearbyStop(){
@@ -418,6 +409,28 @@ function computeSchedule(ordered,hotels,dayEndMap=st.day_end_points){
   return{sch,hbd,totalDays:day,totalKm};
 }
 
+function getDisplayTimesForDay(day,dayStops){
+  const osrm=st.osrm_by_day[day];
+  if(!osrm||!dayStops.length)return{};
+  const{ws,we,svc:defSvc}=getWorkCfg();
+  const out={};
+  let cur=ws;
+  dayStops.forEach((s,i)=>{
+    const svcMin=Number((getShopMeta(s.name)||s).svcMin)>0?Number((getShopMeta(s.name)||s).svcMin):defSvc;
+    const leg=osrm.legByStop?.[s.stt];
+    if(i===0&&!leg){
+      out[s.stt]={arriveTime:fmt(ws),departTime:fmt(ws+svcMin),overtime:(ws+svcMin)>we,isReal:true};
+      cur=ws+svcMin;
+      return;
+    }
+    const travel=leg?leg.min:0;
+    const o=adv(cur,travel,svcMin);
+    out[s.stt]={arriveTime:fmt(o.arrive),departTime:fmt(o.depart),overtime:o.depart>we,isReal:true};
+    cur=o.depart;
+  });
+  return out;
+}
+
 function getActiveShopPool(){
   let pool=(st.raw.shops.length?st.raw.shops:st.raw.precomputed).map(s=>({...s}));
   if(st.only_due){
@@ -516,7 +529,13 @@ async function importExcelFile(f){
 
     if(!shops.length&&precomputed.length){
       shops=precomputed.map(p=>({name:p.name,lon:p.lon,lat:p.lat,province:p.province,freqDays:p.freqDays||0,lastVisit:p.lastVisit||"",svcMin:p.svcMin||0}));
+      st.excel_src="lichtrinh";
+    }else if(precomputed.length){
+      st.excel_src=confirm("File Excel có sẵn lịch trình (sheet LichTrinh).\n\n• OK: Giữ nguyên lịch trình có sẵn trong file\n• Huỷ: Tự tính và sắp xếp lại từ danh sách CuaHang")?"lichtrinh":"optimize";
+    }else{
+      st.excel_src="optimize";
     }
+    localStorage.setItem("lt_src",st.excel_src);
 
     dPre.items.forEach(r=>{
       if(r._ciStatus==="Đã ghé"||r._ciStatus==="✓"||r._ciStatus==="true"){
@@ -597,13 +616,10 @@ function onPasteCoords(prefix){
   const inp=document.getElementById(`${prefix}-link`);
   const msg=document.getElementById(`${prefix}-link-msg`);
   const res=parseMapsLinkOrCoords(inp.value);
-  if(!res){
-    msg.textContent="";
-    return;
-  }
+  if(!res){msg.textContent="";return;}
   if(res.shortLink){
     msg.style.color="var(--warn)";
-    msg.textContent="⚠️ Link rút gọn maps.app.goo.gl cần mở trong Google Maps rồi copy tọa độ (ví dụ: 15.880, 108.338) dán vào đây.";
+    msg.textContent="⚠️ Link rút gọn maps.app.goo.gl cần mở trên Google Maps rồi copy tọa độ (15.880, 108.338) dán vào đây.";
     return;
   }
   msg.style.color="var(--acc)";
@@ -612,8 +628,15 @@ function onPasteCoords(prefix){
   else setDeMiniPin(res.lat,res.lon);
 }
 
-// ── THÊM / SỬA / XOÁ ĐIỂM & CHUYỂN VỊ TRÍ NHANH ─────────────
+// ── THÊM / SỬA / XOÁ ĐIỂM & CHẾ ĐỘ SẮP XẾP ─────────────────
 let ptType="shop",editTarget=null,miniMap=null,miniMarker=null,suggestHits=[];
+
+function toggleEditMode(){
+  st.edit_mode=!st.edit_mode;
+  document.getElementById("btn-edit-mode").classList.toggle("active",st.edit_mode);
+  toast(st.edit_mode?"⇅ Đang bật chế độ Sắp xếp & Sửa":"✅ Đã tắt chế độ Sắp xếp");
+  renderUI();
+}
 
 function setPointType(t){
   ptType=t;
@@ -970,7 +993,6 @@ function saveDayEnd(){
 
 // ── QUẢN LÝ KHÁCH SẠN ──────────────────────────────────────
 function openHotelsManager(){
-  closeDlg("settings-dialog");
   renderHotelsManager();
   openDlg("hotels-dialog");
 }
@@ -1280,7 +1302,6 @@ async function loadDayExtras(){
         if(legIdx>=0&&rt.legs[legIdx])legByStop[s.stt]=rt.legs[legIdx];
       });
       st.osrm_by_day[day]={...rt,legByStop};
-      renderDayMetaBar();
       renderUI();
       renderMap();
     }
@@ -1289,29 +1310,51 @@ async function loadDayExtras(){
 
 function renderDayMetaBar(){
   const bar=document.getElementById("day-meta-bar");
-  if(st.sel_day===0||st.search){bar.style.display="none";return;}
+  const base=baseStops();
+  const vis=visibleStops();
+  const doneCnt=base.filter(s=>!!getCI(s.name)).length;
+  const osrm=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.osrm_by_day[st.sel_day]:null;
+  const km=osrm?osrm.totalKm:vis.reduce((s,x)=>s+(x.distKm||0),0);
+  const dupChip=st.duplicates.length?`<span class="meta-chip warn" onclick="showDuplicates()">⚠️ ${st.duplicates.length} trùng</span>`:"";
+
+  if(st.sel_day===0||st.search){
+    bar.innerHTML=`
+      <div class="day-meta-info">
+        <span class="meta-chip prog">✅ ${doneCnt}/${base.length} điểm</span>
+        <span class="meta-chip">🛣️ ~${km.toFixed(1)} km</span>
+        ${dupChip}
+      </div>
+      <button class="btn-mini-rep" onclick="openStatsDialog()">📊 Thống kê</button>`;
+    return;
+  }
+
   const cal=st.day_calendar[st.sel_day];
-  if(!cal){bar.style.display="none";return;}
-  const wx=st.weather_by_day[`${st.sel_day}_${cal.iso}`];
-  const osrm=st.osrm_by_day[st.sel_day];
-  let roadChip="";
+  const wx=cal?st.weather_by_day[`${st.sel_day}_${cal.iso}`]:null;
+  let kmTxt=`~${km.toFixed(1)} km`;
   if(osrm){
     const hh=Math.floor(osrm.totalMin/60),mm=osrm.totalMin%60;
-    roadChip=`<span class="meta-chip road">🛣️ Đường bộ: ${osrm.totalKm.toFixed(1)} km (~${hh?`${hh}h`:""}${mm}p)</span>`;
+    kmTxt=`🛣️ ${osrm.totalKm.toFixed(1)} km (${hh?`${hh}h`:""}${mm}p)`;
   }
-  bar.style.display="flex";
+
   bar.innerHTML=`
     <div class="day-meta-info">
-      <span class="meta-chip">📅 ${escHtml(cal.weekday)} ${escHtml(cal.solar)} (${escHtml(cal.lunar)})</span>
-      ${cal.holiday?`<span class="meta-chip hol">🎉 ${escHtml(cal.holiday)}</span>`:(cal.isSunday?`<span class="meta-chip hol">☀️ Chủ nhật</span>`:"")}
-      ${wx?`<span class="meta-chip wx">${wx.icon} ${wx.tMin}–${wx.tMax}°C · ${wx.rain}% mưa</span>`:""}
-      ${roadChip}
+      ${cal?`<span class="meta-chip">📅 ${escHtml(cal.weekday)} ${escHtml(cal.solar)} (${escHtml(cal.lunar)})</span>`:""}
+      ${cal?.holiday?`<span class="meta-chip hol">🎉 ${escHtml(cal.holiday)}</span>`:(cal?.isSunday?`<span class="meta-chip hol">☀️ CN</span>`:"")}
+      ${wx?`<span class="meta-chip wx">${wx.icon} ${wx.tMin}–${wx.tMax}°C · ${wx.rain}%</span>`:""}
+      <span class="meta-chip">${kmTxt}</span>
+      <span class="meta-chip prog">✅ ${doneCnt}/${base.length}</span>
+      ${dupChip}
     </div>
-    <button class="btn-mini-rep" onclick="copyDayReport(${st.sel_day})">📋 Báo cáo</button>`;
+    <button class="btn-mini-rep" onclick="copyDayReport(${st.sel_day})">📋 Zalo</button>`;
+}
+
+function copyCurrentReport(){
+  const d=st.sel_day>0?st.sel_day:1;
+  copyDayReport(d);
 }
 
 async function copyDayReport(day){
-  const stops=st.schedule.filter(s=>s.day===day);if(!stops.length)return;
+  const stops=st.schedule.filter(s=>s.day===day);if(!stops.length){toast("Chưa có dữ liệu để copy!");return;}
   const cal=st.day_calendar[day];
   const wx=cal?st.weather_by_day[`${day}_${cal.iso}`]:null;
   const osrm=st.osrm_by_day[day];
@@ -1444,33 +1487,28 @@ function navigateDay(){
 }
 
 // ── Render UI ───────────────────────────────────────────────
-function switchMode(m){if(!MODES[m])return;st.mode=m;st.max_shops=MODES[m].max;localStorage.setItem("lt_mode",m);localStorage.setItem("lt_max",String(st.max_shops));st.sel_day=1;refreshAll();}
+function toggleModeQuick(){
+  const next=st.mode==="xemay"?"oto":"xemay";
+  st.mode=next;
+  st.max_shops=MODES[next].max;
+  localStorage.setItem("lt_mode",next);
+  localStorage.setItem("lt_max",String(st.max_shops));
+  st.sel_day=1;
+  refreshAll();
+  toast(`Đã chuyển sang ${MODES[next].label} (max ${st.max_shops} điểm/ngày)`);
+}
 function selectDay(d){st.sel_day=d;clearSearch();renderUI();renderMap();loadDayExtras();}
 
 function renderUI(){
   const prof=MODES[st.mode]||MODES.xemay;
   const totalDays=st.schedule.reduce((m,s)=>Math.max(m,s.day),0);
-  const base=baseStops();
   const vis=visibleStops();
   const osrmCur=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.osrm_by_day[st.sel_day]:null;
-  const vkm=osrmCur?osrmCur.totalKm:vis.reduce((s,x)=>s+(x.distKm||0),0);
+  const osrmTimes=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?getDisplayTimesForDay(st.sel_day,vis):{};
 
-  document.getElementById("btn-xemay").classList.toggle("active",st.mode==="xemay");
-  document.getElementById("btn-oto").classList.toggle("active",st.mode==="oto");
-  document.getElementById("sub-title").textContent=`${prof.label} ${prof.spd}km/h · ${st.cfg.ws}–${st.cfg.we} · max ${st.max_shops}/ngày`;
-  document.getElementById("stat-shops").textContent=`${vis.length} điểm`;
-  document.getElementById("stat-days").textContent=`${totalDays} ngày`;
-  document.getElementById("stat-km").textContent=`~${vkm.toFixed(1)} km`;
+  document.getElementById("sub-title").textContent=`${st.mode==="xemay"?"🛵":"🚗"} ${prof.label} · ${st.cfg.ws}–${st.cfg.we} · max ${st.max_shops}/ngày ⇄`;
   document.getElementById("opt-dot").classList.toggle("show",st.needs_reopt);
-
-  const dupEl=document.getElementById("stat-dup");
-  if(st.duplicates.length){dupEl.style.display="inline-block";dupEl.textContent=`⚠️ ${st.duplicates.length} trùng`;}
-  else dupEl.style.display="none";
-
-  const doneCnt=base.filter(s=>!!getCI(s.name)).length;
-  const pct=base.length?Math.round((doneCnt/base.length)*100):0;
-  document.getElementById("prog-txt").textContent=`✅ ${doneCnt}/${base.length}`;
-  document.getElementById("prog-fill").style.width=pct+"%";
+  document.getElementById("btn-edit-mode").classList.toggle("active",st.edit_mode);
 
   const te=document.getElementById("day-tabs");
   let th=`<button class="day-tab ${st.sel_day===0&&!st.search?"active":""}" onclick="selectDay(0)">Tất cả (${st.schedule.length})</button>`;
@@ -1506,6 +1544,7 @@ function renderUI(){
     const meta=getShopMeta(s.name)||s;
     const vs=getVisitStatus(meta);
     const osrmLeg=osrmCur?.legByStop?.[s.stt];
+    const dt=osrmTimes[s.stt]||{arriveTime:s.arriveTime,departTime:s.departTime,overtime:s.overtime};
     const distTxt=osrmLeg?`+${osrmLeg.km.toFixed(1)} km (~${osrmLeg.min}p)`:`+${(s.distKm||0).toFixed(1)} km`;
     let myDistTag="";
     if(st.my_pos){
@@ -1517,20 +1556,22 @@ function renderUI(){
         <span class="badge">${s.stt}</span>
         <div class="shop-info">
           <strong>${escHtml(s.name)}</strong>
-          <div class="shop-meta">${escHtml(s.province)} · Ngày ${s.day} · ${distTxt}${meta.svcMin?` · ${meta.svcMin}p`:""}</div>
+          <div class="shop-meta">${escHtml(s.province)}${st.sel_day===0||st.search?` · Ngày ${s.day}`:""} · ${distTxt}${meta.svcMin?` · ${meta.svcMin}p`:""}</div>
           ${(vs||myDistTag)?`<div class="shop-tags">${vs?`<span class="vtag ${vs.cls}">🔄 ${escHtml(vs.label)}</span>`:""}${myDistTag}</div>`:""}
           ${ci?.note?`<div class="shop-note">📝 ${escHtml(ci.note)}</div>`:""}
         </div>
-        <span class="shop-time${s.overtime?" overtime":""}">${s.overtime?"⚠️ ":""}${escHtml(s.arriveTime)}–${escHtml(s.departTime)}</span>
+        <span class="shop-time${dt.overtime?" overtime":""}">${dt.overtime?"⚠️ ":""}${escHtml(dt.arriveTime)}–${escHtml(dt.departTime)}</span>
       </div>
       <div class="shop-acts">
         <a class="btn-sm green" href="${navUrl(s)}" target="_blank">🧭 Đường</a>
         <button class="btn-sm${ci?" checked":""}" onclick="toggleCheckin(${s.stt})">${ci?`✅ ${ci.time||"Đã ghé"}`:"⬜ Check-in"}</button>
         <button class="btn-sm compact" title="Ghi chú & Lịch sử" onclick="openNoteDialog(${s.stt})">📝</button>
-        <button class="btn-sm compact" title="Sửa / Đổi vị trí" onclick="editShopByStt(${s.stt})">✏️</button>
-        <button class="btn-sm compact" title="Đẩy lên" onclick="moveStop(${s.stt},-1)">▲</button>
-        <button class="btn-sm compact" title="Đẩy xuống" onclick="moveStop(${s.stt},1)">▼</button>
       </div>
+      ${st.edit_mode?`<div class="shop-edit-acts">
+        <button class="btn-sm" onclick="editShopByStt(${s.stt})">✏️ Sửa / Đổi STT</button>
+        <button class="btn-sm compact" onclick="moveStop(${s.stt},-1)">▲ Lên</button>
+        <button class="btn-sm compact" onclick="moveStop(${s.stt},1)">▼ Xuống</button>
+      </div>`:""}
     </div>`;
   });
 
@@ -1552,7 +1593,7 @@ function renderUI(){
       <div class="shop-acts">
         ${h?.lat!=null&&h.type!=="last_shop"?`<a class="btn-sm green" href="${hu}" target="_blank">🧭 Đường</a>`:""}
         <button class="btn-sm" onclick="openDayEndDialog(${st.sel_day})">📍 Đổi điểm cuối${hasNext?` / BĐ N${st.sel_day+1}`:""}</button>
-        ${hIdx>=0?`<button class="btn-sm compact" title="Sửa KS" onclick="editHotel(${hIdx})">✏️</button><button class="btn-sm compact red" title="Xoá KS" onclick="deleteHotel(${hIdx})">🗑️</button>`:""}
+        ${st.edit_mode&&hIdx>=0?`<button class="btn-sm compact" onclick="editHotel(${hIdx})">✏️</button><button class="btn-sm compact red" onclick="deleteHotel(${hIdx})">🗑️</button>`:""}
       </div>
     </div>`;
   }
@@ -1560,7 +1601,7 @@ function renderUI(){
   le.innerHTML=html||`<div style="text-align:center;padding:40px 16px;color:var(--muted);">
     <div style="font-size:36px;margin-bottom:12px;">🗺️</div>
     <div style="font-weight:600;margin-bottom:6px;">${st.search||st.status_filter!=="all"?"Không có điểm phù hợp bộ lọc":"Chưa có dữ liệu"}</div>
-    <div style="font-size:13px;">${st.search||st.status_filter!=="all"?"Thử đổi bộ lọc hoặc xoá từ khóa tìm kiếm":"Nhấn 📂 Nhập để nạp Excel hoặc ➕ Điểm để thêm mới"}</div>
+    <div style="font-size:13px;">${st.search||st.status_filter!=="all"?"Thử đổi bộ lọc hoặc xoá từ khóa tìm kiếm":"Mở ☰ Menu → Nhập Excel hoặc bấm ➕ Điểm để thêm mới"}</div>
   </div>`;
 }
 
@@ -1581,8 +1622,6 @@ function openSettings(){
   document.getElementById("cfg-le").value=st.cfg.le;
   document.getElementById("cfg-start-date").value=st.start_date;
   document.getElementById("cfg-skip-off").checked=st.skip_off_days;
-  document.getElementById("cfg-src").value=st.excel_src;
-  document.getElementById("cfg-hotel-cnt").textContent=st.raw.hotels.length;
   openDlg("settings-dialog");
 }
 function onCfgModeChange(){const m=document.getElementById("cfg-mode").value;document.getElementById("cfg-max").value=MODES[m]?.max||4;}
@@ -1599,11 +1638,9 @@ function saveSettings(){
   };
   st.start_date=document.getElementById("cfg-start-date").value||toLocalIso();
   st.skip_off_days=document.getElementById("cfg-skip-off").checked;
-  st.excel_src=document.getElementById("cfg-src").value;
   localStorage.setItem("lt_mode",st.mode);localStorage.setItem("lt_max",String(st.max_shops));
   localStorage.setItem("lt_cfg",JSON.stringify(st.cfg));
   localStorage.setItem("lt_start_date",st.start_date);localStorage.setItem("lt_skip_off",st.skip_off_days?"1":"0");
-  localStorage.setItem("lt_src",st.excel_src);
   closeDlg("settings-dialog");
   st.sel_day=1;refreshAll();
   toast("⚙️ Đã lưu cài đặt");
@@ -1616,7 +1653,7 @@ function resetData(){
 function clearCheckins(){
   if(!confirm("Xoá trạng thái Check-in chuyến này để bắt đầu chuyến mới?\n(Lịch sử các lần ghé trước vẫn được giữ lại)"))return;
   st.checkins={};localStorage.removeItem("lt_ci");
-  closeDlg("settings-dialog");refreshAll();
+  refreshAll();
   toast("🧹 Đã bắt đầu chuyến mới (giữ nguyên lịch sử ghé)");
 }
 

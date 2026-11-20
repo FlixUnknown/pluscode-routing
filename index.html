@@ -19,17 +19,16 @@
 </head>
 <body>
 <header>
-  <div>
+  <div class="hdr-title">
     <h1>Lộ Trình Kinh Doanh</h1>
-    <small id="sub-title">08:00–17:00 · Nghỉ trưa 11:00–13:00</small>
+    <button type="button" class="sub-pill" id="sub-title" title="Chạm để đổi Xe máy / Ô tô" onclick="toggleModeQuick()">🛵 Xe máy ⇄</button>
   </div>
   <div class="hdr-btns">
-    <button class="btn-icon" onclick="document.getElementById('excel-input').click()">📂 Nhập</button>
-    <button class="btn-icon teal" onclick="exportExcel()">📤 Xuất</button>
+    <button class="btn-icon mob-only" id="btn-map-tog" onclick="toggleMapMobile()">🗺️ Ẩn</button>
     <button class="btn-icon accent" onclick="openPointDialog('shop')">➕ Điểm</button>
-    <button class="btn-icon" title="Thống kê" onclick="openStatsDialog()">📊</button>
-    <button class="btn-icon" title="Cài đặt" onclick="openSettings()">⚙️</button>
+    <button class="btn-icon" onclick="openDlg('menu-dialog')">☰ Menu</button>
     <input id="excel-input" type="file" accept=".xlsx,.xls" hidden/>
+    <input id="restore-json-input" type="file" accept=".json,application/json" hidden/>
   </div>
 </header>
 
@@ -37,27 +36,12 @@
   <div id="map-wrap">
     <div id="map"></div>
     <button class="map-gps-btn map-expand-btn mob-only" id="btn-map-exp" title="Phóng to / Thu nhỏ" onclick="toggleMapExpand()">⤢</button>
-    <button class="map-gps-btn map-live-btn" id="btn-live-gps" title="Theo dõi vị trí liên tục (Live GPS)" onclick="toggleLiveGPS()">🛰️</button>
-    <button class="map-gps-btn" title="Vị trí GPS hiện tại" onclick="locateMeOnMap()">📍</button>
+    <button class="map-gps-btn" id="btn-smart-gps" title="Định vị & Theo dõi GPS liên tục" onclick="smartGPSBtn()">📍</button>
   </div>
 
   <div id="side-panel">
-    <div class="toolbar">
-      <div class="seg">
-        <button id="btn-xemay" class="seg-btn" onclick="switchMode('xemay')">🛵 Xe máy</button>
-        <button id="btn-oto" class="seg-btn" onclick="switchMode('oto')">🚗 Ô tô</button>
-      </div>
-      <div class="stats">
-        <span class="stat-pill" id="stat-shops">0 điểm</span>
-        <span class="stat-pill" id="stat-days">0 ngày</span>
-        <span class="stat-pill" id="stat-km">0 km</span>
-        <button class="stat-pill mob-only" id="btn-map-tog" style="border:none;cursor:pointer;" onclick="toggleMapMobile()">🗺️ Ẩn</button>
-        <span class="stat-pill warn" id="stat-dup" style="display:none;" onclick="showDuplicates()"></span>
-      </div>
-    </div>
-
     <div class="day-tabs" id="day-tabs"></div>
-    <div class="day-meta-bar" id="day-meta-bar" style="display:none;"></div>
+    <div class="day-meta-bar" id="day-meta-bar"></div>
 
     <div class="search-bar">
       <div class="search-wrap">
@@ -68,12 +52,9 @@
         <option value="all">Tất cả</option>
         <option value="todo">⬜ Chưa ghé</option>
         <option value="done">✅ Đã ghé</option>
-        <option value="due">⏰ Đến/Quá hạn</option>
+        <option value="due">⏰ Đến hạn</option>
       </select>
-      <div class="prog-box">
-        <span class="prog-txt" id="prog-txt">✅ 0/0</span>
-        <div class="prog-track"><div class="prog-fill" id="prog-fill"></div></div>
-      </div>
+      <button type="button" class="sort-tog" id="btn-edit-mode" title="Bật/Tắt chế độ Sắp xếp & Sửa điểm" onclick="toggleEditMode()">⇅</button>
     </div>
 
     <div class="act-strip">
@@ -90,6 +71,49 @@
 
 <div id="toast" class="toast"></div>
 <div id="drop-overlay" class="drop-overlay">📂 Thả file Excel (.xlsx) vào đây để nạp</div>
+
+<!-- MENU TỔNG PHÂN CẤP THEO ĐỘ QUAN TRỌNG -->
+<div class="modal" id="menu-dialog" onclick="if(event.target===this)closeDlg('menu-dialog')">
+  <div class="modal-box">
+    <div class="dlg-head">
+      <span>☰ Công cụ & Quản lý</span>
+      <button type="button" class="dlg-close" onclick="closeDlg('menu-dialog')">✕</button>
+    </div>
+    <div class="dlg-body">
+      <div class="menu-sec">
+        <div class="menu-sec-title">1. Thao tác trong chuyến đi</div>
+        <div class="menu-grid">
+          <button class="menu-item pri" onclick="closeDlg('menu-dialog');copyCurrentReport()">📋 Báo cáo Zalo</button>
+          <button class="menu-item pri" onclick="closeDlg('menu-dialog');openStatsDialog()">📊 Thống kê</button>
+          <button class="menu-item" onclick="toggleModeQuick();closeDlg('menu-dialog')">🛵/🚗 Đổi phương tiện</button>
+          <button class="menu-item" onclick="closeDlg('menu-dialog');toggleEditMode()">⇅ Sắp xếp / Sửa CH</button>
+        </div>
+      </div>
+
+      <div class="menu-sec">
+        <div class="menu-sec-title">2. Chuẩn bị & Lập dữ liệu</div>
+        <div class="menu-grid">
+          <button class="menu-item" onclick="closeDlg('menu-dialog');openOptimize()">⚡ Tối ưu 3 phương án</button>
+          <button class="menu-item" onclick="closeDlg('menu-dialog');openHotelsManager()">🏨 DS Khách sạn</button>
+          <button class="menu-item" onclick="closeDlg('menu-dialog');document.getElementById('excel-input').click()">📂 Nhập Excel</button>
+          <button class="menu-item" onclick="closeDlg('menu-dialog');exportExcel()">📤 Xuất Excel</button>
+        </div>
+      </div>
+
+      <div class="menu-sec">
+        <div class="menu-sec-title">3. Cài đặt & An toàn dữ liệu</div>
+        <div class="menu-grid">
+          <button class="menu-item" onclick="closeDlg('menu-dialog');openSettings()">⚙️ Giờ làm & Lịch</button>
+          <button class="menu-item" onclick="closeDlg('menu-dialog');downloadSampleExcel()">📋 File Excel mẫu</button>
+          <button class="menu-item" onclick="closeDlg('menu-dialog');backupJSON()">💾 Sao lưu (.json)</button>
+          <button class="menu-item" onclick="closeDlg('menu-dialog');document.getElementById('restore-json-input').click()">♻️ Khôi phục (.json)</button>
+          <button class="menu-item warn" onclick="closeDlg('menu-dialog');clearCheckins()">🧹 Chuyến mới</button>
+          <button class="menu-item warn" onclick="closeDlg('menu-dialog');resetData()">🔄 Reset gốc</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 
 <!-- MODAL THÊM / SỬA SHOP & KHÁCH SẠN -->
 <div class="modal" id="point-dialog" onclick="if(event.target===this)closeDlg('point-dialog')">
@@ -116,14 +140,14 @@
           <input id="pt-province" type="text" enterkeyhint="done" placeholder="Quảng Nam..."/>
         </div>
         <div class="field" id="pt-svc-wrap">
-          <label>Thời gian ghé (phút)</label>
+          <label>Phút ghé</label>
           <input id="pt-svc" type="number" inputmode="numeric" min="0" max="300" placeholder="Mặc định"/>
         </div>
       </div>
       <div class="coord-row" id="pt-visit-row">
         <div class="field">
-          <label>Tần suất ghé (ngày)</label>
-          <input id="pt-freq" type="number" inputmode="numeric" min="0" max="365" placeholder="VD: 7, 14, 30"/>
+          <label>Tần suất (ngày)</label>
+          <input id="pt-freq" type="number" inputmode="numeric" min="0" max="365" placeholder="7, 14, 30"/>
         </div>
         <div class="field">
           <label>Ghé gần nhất</label>
@@ -135,7 +159,7 @@
         <select id="pt-move-pos"></select>
       </div>
       <div class="field">
-        <label>Dán nhanh Link Google Maps hoặc cặp tọa độ (lat, lon)</label>
+        <label>Dán Link Google Maps hoặc tọa độ (lat, lon)</label>
         <input id="pt-link" type="text" enterkeyhint="done" placeholder="Dán link Google Maps hoặc 15.880, 108.338" oninput="onPasteCoords('pt')"/>
         <div class="hint-txt" id="pt-link-msg"></div>
       </div>
@@ -186,7 +210,7 @@
           <input id="de-name" type="text" enterkeyhint="done" placeholder="Ví dụ: Nhà nghỉ Bình Minh / Điểm xuất phát"/>
         </div>
         <div class="field">
-          <label>Dán nhanh Link Google Maps hoặc cặp tọa độ</label>
+          <label>Dán Link Google Maps hoặc cặp tọa độ</label>
           <input id="de-link" type="text" enterkeyhint="done" placeholder="Dán link Google Maps hoặc 15.880, 108.338" oninput="onPasteCoords('de')"/>
           <div class="hint-txt" id="de-link-msg"></div>
         </div>
@@ -258,7 +282,7 @@
 <div class="modal" id="settings-dialog" onclick="if(event.target===this)closeDlg('settings-dialog')">
   <div class="modal-box">
     <div class="dlg-head">
-      <span>⚙️ Cài đặt & Sao lưu</span>
+      <span>⚙️ Cài đặt Lịch & Giờ làm</span>
       <button type="button" class="dlg-close" onclick="closeDlg('settings-dialog')">✕</button>
     </div>
     <div class="dlg-body">
@@ -299,38 +323,19 @@
           <input id="cfg-le" type="time"/>
         </div>
       </div>
-      <div class="coord-row">
-        <div class="field">
-          <label>Ngày bắt đầu đi</label>
-          <input id="cfg-start-date" type="date"/>
-        </div>
-        <div class="field">
-          <label>Nguồn Excel</label>
-          <select id="cfg-src">
-            <option value="optimize">Tối ưu từ CuaHang</option>
-            <option value="lichtrinh">Đọc sẵn LichTrinh</option>
-          </select>
-        </div>
-      </div>
       <div class="field">
+        <label>Ngày bắt đầu đi</label>
+        <input id="cfg-start-date" type="date"/>
+      </div>
+      <div class="field" style="margin-bottom:0;">
         <label class="chk-inline">
           <input type="checkbox" id="cfg-skip-off"/> Tự động né Chủ nhật & Ngày lễ nghỉ
         </label>
       </div>
-      <div class="field" style="display:flex;gap:8px;">
-        <button type="button" class="btn-sm" onclick="openHotelsManager()">🏨 DS Khách sạn (<span id="cfg-hotel-cnt">0</span>)</button>
-        <button type="button" class="btn-sm green" onclick="downloadSampleExcel()">📋 File Excel mẫu</button>
-      </div>
-      <div class="field" style="display:flex;gap:8px;margin-bottom:0;">
-        <button type="button" class="btn-sm" onclick="backupJSON()">💾 Sao lưu (.json)</button>
-        <button type="button" class="btn-sm" onclick="document.getElementById('restore-json-input').click()">♻️ Khôi phục (.json)</button>
-        <input id="restore-json-input" type="file" accept=".json,application/json" hidden/>
-      </div>
     </div>
     <div class="dlg-foot">
-      <button class="btn-sm" onclick="resetData()">Reset</button>
-      <button class="btn-sm red" onclick="clearCheckins()">Xoá Check-in</button>
-      <button class="btn-sm green" onclick="saveSettings()">Lưu</button>
+      <button class="btn-sm" onclick="closeDlg('settings-dialog')">Huỷ</button>
+      <button class="btn-sm green" onclick="saveSettings()">💾 Lưu cài đặt</button>
     </div>
   </div>
 </div>

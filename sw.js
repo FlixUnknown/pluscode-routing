@@ -1,4 +1,4 @@
-const APP_CACHE = "lt-app-v4";
+const APP_CACHE = "lt-app-v5";
 const TILE_CACHE = "lt-tiles-v1";
 
 const APP_SHELL = [
