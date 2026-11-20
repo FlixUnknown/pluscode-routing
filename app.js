@@ -10,6 +10,7 @@ const EAR=6371,ROAD=1.35,SVC=30,WS=480,LS=660,LE=780,WE=1020;
 const MODES={xemay:{label:"Xe máy",max:4,spd:35},oto:{label:"Ô tô",max:6,spd:40}};
 const escHtml=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const normVN=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/đ/g,"d").replace(/Đ/g,"D").toLowerCase().trim();
+const parseCoord=v=>{if(v===null||v===undefined||v==="")return NaN;if(typeof v==="number")return v;return parseFloat(String(v).replace(",",".").trim());};
 const nowHHMM=()=>{const d=new Date();return String(d.getHours()).padStart(2,"0")+":"+String(d.getMinutes()).padStart(2,"0");};
 
 let toastTimer=null;
@@ -17,6 +18,16 @@ function toast(msg){
   const el=document.getElementById("toast");if(!el)return;
   el.textContent=msg;el.classList.add("show");
   clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("show"),2600);
+}
+
+// Modal helpers (tương thích mọi iOS & Android)
+function openDlg(id){
+  const el=document.getElementById(id);
+  if(el)el.classList.add("open");
+}
+function closeDlg(id){
+  const el=document.getElementById(id);
+  if(el)el.classList.remove("open");
 }
 
 function dedupeNames(items){
@@ -90,7 +101,7 @@ function renderMap(){
   if(lpoly){lmap.removeLayer(lpoly);lpoly=null;}
   const stops=visibleStops(); if(!stops.length)return;
   const pts=[];
-  if(!st.search&&st.status_filter==="all"&&st.sel_day===1&&st.day_end_points[0]?.lat){
+  if(!st.search&&st.status_filter==="all"&&st.sel_day===1&&st.day_end_points[0]?.lat!=null){
     const s0=st.day_end_points[0];
     const sm=L.marker([s0.lat,s0.lon],{icon:mkIcon("S","#2563eb",false)})
       .bindPopup(`<strong>🚩 Xuất phát Ngày 1</strong><br/>${escHtml(s0.name)}`)
@@ -105,7 +116,7 @@ function renderMap(){
     lmarkers.push(m); lmarkerByStt[s.stt]=m; pts.push([s.lat,s.lon]);
   });
   const h=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.hotels_by_day[st.sel_day]:null;
-  if(h?.lat&&h?.lon&&h.type!=="last_shop"){
+  if(h?.lat!=null&&h?.lon!=null&&h.type!=="last_shop"){
     const hm=L.marker([h.lat,h.lon],{icon:mkIcon("H","#e67e22",false)})
       .bindPopup(`<strong>🏨 ${escHtml(h.name)}</strong><br/>Cách điểm cuối ~${(h.dist||0).toFixed(1)} km<br/><a class="popup-nav" href="https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}&travelmode=driving" target="_blank">🧭 Chỉ đường</a>`)
       .addTo(lmap);
@@ -136,14 +147,17 @@ function toggleMapExpand(){
   setTimeout(()=>lmap.invalidateSize(),220);
 }
 
-// ── GPS ─────────────────────────────────────────────────────
+// ── GPS (có kiểm tra HTTPS) ─────────────────────────────────
 function getGPS(){
   return new Promise((res,rej)=>{
+    if(!window.isSecureContext && location.hostname!=="localhost" && location.hostname!=="127.0.0.1"){
+      return rej(new Error("GPS chỉ hoạt động khi mở trang qua HTTPS (ví dụ GitHub Pages) hoặc localhost."));
+    }
     if(!navigator.geolocation)return rej(new Error("Thiết bị không hỗ trợ GPS."));
     navigator.geolocation.getCurrentPosition(
       p=>res({lat:p.coords.latitude,lon:p.coords.longitude}),
-      err=>rej(new Error(err.code===1?"Bạn chưa cấp quyền vị trí GPS.":"Không lấy được tín hiệu GPS.")),
-      {enableHighAccuracy:true,timeout:10000,maximumAge:60000}
+      err=>rej(new Error(err.code===1?"Bạn chưa cấp quyền vị trí GPS cho trình duyệt.":err.code===3?"Hết thời gian chờ tín hiệu GPS.":"Không lấy được tín hiệu GPS.")),
+      {enableHighAccuracy:true,timeout:12000,maximumAge:60000}
     );
   });
 }
@@ -328,18 +342,18 @@ function buildSchedule(customOrder=null){
 // ── Đọc, Xuất & Tải Mẫu Excel ──────────────────────────────
 async function importExcelFile(f){
   if(!f)return;
+  if(typeof XLSX==="undefined"){alert("Chưa tải được thư viện đọc Excel. Vui lòng kiểm tra kết nối mạng rồi tải lại trang.");return;}
   try{
     const buf=await f.arrayBuffer();const wb=XLSX.read(buf,{type:"array"});
     const tr=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:null}):[];
-    const pn=v=>{if(v===null||v===undefined||v==="")return NaN;if(typeof v==="number")return v;return parseFloat(String(v).replace(",",".").trim());};
-    const rawShops=tr("CuaHang").map(r=>({name:String(r["Tên cửa hàng"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(s=>s.name&&s.province&&!isNaN(s.lon)&&!isNaN(s.lat));
-    const rawHotels=tr("KhachSan").map(r=>({name:String(r["Tên khách sạn"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(h=>h.name&&!isNaN(h.lon)&&!isNaN(h.lat));
+    const rawShops=tr("CuaHang").map(r=>({name:String(r["Tên cửa hàng"]||"").trim(),lon:parseCoord(r["kinh độ"]),lat:parseCoord(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(s=>s.name&&s.province&&!isNaN(s.lon)&&!isNaN(s.lat));
+    const rawHotels=tr("KhachSan").map(r=>({name:String(r["Tên khách sạn"]||"").trim(),lon:parseCoord(r["kinh độ"]),lat:parseCoord(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(h=>h.name&&!isNaN(h.lon)&&!isNaN(h.lat));
     const ltRows=tr("LichTrinh");
     const rawPre=ltRows.map((r,i)=>({
       stt:Number(r["STT"])||i+1,day:Number(r["Ngày"])||1,name:String(r["Tên cửa hàng"]||"").trim(),
-      province:String(r["tỉnh"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),
-      distKm:pn(r["Quãng đường (km)"])||0,nightHotel:r["Nghỉ đêm tại"]?String(r["Nghỉ đêm tại"]).trim():null,
-      hotelDist:pn(r["Cách khách sạn (km)"])||0,
+      province:String(r["tỉnh"]||"").trim(),lon:parseCoord(r["kinh độ"]),lat:parseCoord(r["vĩ độ"]),
+      distKm:parseCoord(r["Quãng đường (km)"])||0,nightHotel:r["Nghỉ đêm tại"]?String(r["Nghỉ đêm tại"]).trim():null,
+      hotelDist:parseCoord(r["Cách khách sạn (km)"])||0,
       arriveTime:r["Giờ đến"]?String(r["Giờ đến"]).trim():"--:--",
       departTime:r["Giờ đi"]?String(r["Giờ đi"]).trim():"--:--",
       _ciStatus:String(r["Trạng thái Check-in"]||"").trim(),
@@ -443,6 +457,23 @@ function setPointType(t){
   document.getElementById("pt-suggest").style.display="none";
 }
 
+function syncMiniMap(cLat,cLon,zoom,hasPin){
+  if(!miniMap){
+    miniMap=L.map("add-mini-map",{zoomControl:false}).setView([cLat,cLon],zoom);
+    L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{maxZoom:19}).addTo(miniMap);
+    miniMap.on("click",e=>setMiniPin(e.latlng.lat,e.latlng.lng));
+  }
+  const refresh=()=>{
+    if(!miniMap)return;
+    miniMap.invalidateSize();
+    miniMap.setView([cLat,cLon],zoom,{animate:false});
+    if(miniMarker){miniMap.removeLayer(miniMarker);miniMarker=null;}
+    if(hasPin)miniMarker=L.marker([cLat,cLon]).addTo(miniMap);
+  };
+  setTimeout(refresh,120);
+  setTimeout(()=>miniMap&&miniMap.invalidateSize(),380);
+}
+
 function openPointDialog(type,editItem=null){
   editTarget=editItem?{type,name:editItem.name}:null;
   document.getElementById("pt-type-wrap").style.display=editItem?"none":"block";
@@ -454,20 +485,10 @@ function openPointDialog(type,editItem=null){
   document.getElementById("pt-suggest").style.display="none";
   document.getElementById("pt-save-btn").textContent=editItem?"💾 Lưu thay đổi":"✅ Thêm vào danh sách";
   document.getElementById("pt-del-btn").style.display=editItem?"inline-block":"none";
-  document.getElementById("point-dialog").showModal();
+  openDlg("point-dialog");
 
-  setTimeout(()=>{
-    const cLat=editItem?.lat||15,cLon=editItem?.lon||108.4,zoom=editItem?13:7;
-    if(!miniMap){
-      miniMap=L.map("add-mini-map",{zoomControl:false}).setView([cLat,cLon],zoom);
-      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{maxZoom:19}).addTo(miniMap);
-      miniMap.on("click",e=>setMiniPin(e.latlng.lat,e.latlng.lng));
-    }
-    miniMap.invalidateSize();
-    miniMap.setView([cLat,cLon],zoom);
-    if(miniMarker){miniMap.removeLayer(miniMarker);miniMarker=null;}
-    if(editItem?.lat&&editItem?.lon)miniMarker=L.marker([editItem.lat,editItem.lon]).addTo(miniMap);
-  },200);
+  const hasPin=Boolean(editItem?.lat!=null&&editItem?.lon!=null);
+  syncMiniMap(hasPin?editItem.lat:15,hasPin?editItem.lon:108.4,hasPin?13:7,hasPin);
 }
 
 function setMiniPin(lat,lon){
@@ -480,13 +501,13 @@ function setMiniPin(lat,lon){
   if(miniMap){
     if(miniMarker)miniMap.removeLayer(miniMarker);
     miniMarker=L.marker([lat,lon]).addTo(miniMap);
-    miniMap.setView([lat,lon],Math.max(miniMap.getZoom(),13));
+    miniMap.setView([lat,lon],Math.max(miniMap.getZoom(),13),{animate:false});
   }
 }
 
 async function fillPointGPS(){
   const btn=document.getElementById("btn-pt-gps");
-  const old=btn.textContent;btn.textContent="⏳...";btn.disabled=true;
+  const old=btn.textContent;btn.textContent="⏳ Đang lấy GPS...";btn.disabled=true;
   try{
     const pos=await getGPS();
     st.my_pos=pos;
@@ -527,11 +548,11 @@ function pickSuggest(idx){
 function savePoint(){
   const name=document.getElementById("pt-name").value.trim();
   const prov=document.getElementById("pt-province").value.trim();
-  const lat=parseFloat(document.getElementById("pt-lat").value);
-  const lon=parseFloat(document.getElementById("pt-lon").value);
+  const lat=parseCoord(document.getElementById("pt-lat").value);
+  const lon=parseCoord(document.getElementById("pt-lon").value);
   if(!name){alert("Vui lòng nhập tên!");return;}
   if(!prov){alert("Vui lòng nhập tỉnh!");return;}
-  if(isNaN(lat)||isNaN(lon)){alert("Vui lòng chọn vị trí trên bản đồ, bấm GPS hoặc nhập tọa độ!");return;}
+  if(isNaN(lat)||isNaN(lon)){alert("Vui lòng chọn vị trí trên bản đồ, bấm GPS hoặc nhập tọa độ hợp lệ!");return;}
 
   const list=ptType==="shop"?st.raw.shops:st.raw.hotels;
   if(editTarget){
@@ -554,7 +575,7 @@ function savePoint(){
   st.excel_src="optimize";
   localStorage.setItem("lt_src","optimize");
   localStorage.setItem("lt_raw",JSON.stringify(st.raw));
-  document.getElementById("point-dialog").close();
+  closeDlg("point-dialog");
   refreshAll();
 }
 
@@ -569,7 +590,7 @@ function deleteEditingPoint(){
     st.raw.hotels=st.raw.hotels.filter(h=>h.name!==editTarget.name);
   }
   localStorage.setItem("lt_raw",JSON.stringify(st.raw));
-  document.getElementById("point-dialog").close();
+  closeDlg("point-dialog");
   st.sel_day=1;refreshAll();
   toast(`🗑️ Đã xoá "${editTarget.name}"`);
 }
@@ -628,7 +649,7 @@ function openDayEndDialog(day){
 
   const cur=st.day_end_points[day];
   const dayStops=st.schedule.filter(s=>s.day===(isDay1Start?1:day));
-  const refPt=isDay1Start?(cur?.lat?cur:dayStops[0]):(cur?.lat?cur:(st.hotels_by_day[day]?.lat?st.hotels_by_day[day]:dayStops[dayStops.length-1]));
+  const refPt=isDay1Start?(cur?.lat!=null?cur:dayStops[0]):(cur?.lat!=null?cur:(st.hotels_by_day[day]?.lat!=null?st.hotels_by_day[day]:dayStops[dayStops.length-1]));
 
   if(cur){
     modeSel.value=cur.type||"custom";
@@ -639,18 +660,18 @@ function openDayEndDialog(day){
       document.getElementById("de-lon").value=cur.lon??"";
     }else{
       document.getElementById("de-name").value="";
-      document.getElementById("de-lat").value=refPt?.lat?Number(refPt.lat).toFixed(6):"";
-      document.getElementById("de-lon").value=refPt?.lon?Number(refPt.lon).toFixed(6):"";
+      document.getElementById("de-lat").value=refPt?.lat!=null?Number(refPt.lat).toFixed(6):"";
+      document.getElementById("de-lon").value=refPt?.lon!=null?Number(refPt.lon).toFixed(6):"";
     }
   }else{
     modeSel.value="default";
     document.getElementById("de-name").value="";
-    document.getElementById("de-lat").value=refPt?.lat?Number(refPt.lat).toFixed(6):"";
-    document.getElementById("de-lon").value=refPt?.lon?Number(refPt.lon).toFixed(6):"";
+    document.getElementById("de-lat").value=refPt?.lat!=null?Number(refPt.lat).toFixed(6):"";
+    document.getElementById("de-lon").value=refPt?.lon!=null?Number(refPt.lon).toFixed(6):"";
   }
   document.getElementById("de-save-hotel").checked=false;
+  openDlg("day-end-dialog");
   onDayEndModeChange();
-  document.getElementById("day-end-dialog").showModal();
 }
 
 function onDayEndModeChange(){
@@ -658,22 +679,24 @@ function onDayEndModeChange(){
   document.getElementById("de-hotel-wrap").style.display=m==="hotel"?"block":"none";
   document.getElementById("de-custom-wrap").style.display=m==="custom"?"block":"none";
   if(m==="custom"){
-    setTimeout(()=>{
-      const lat=parseFloat(document.getElementById("de-lat").value)||15;
-      const lon=parseFloat(document.getElementById("de-lon").value)||108.4;
-      const zoom=document.getElementById("de-lat").value?13:7;
-      if(!deMiniMap){
-        deMiniMap=L.map("de-mini-map",{zoomControl:false}).setView([lat,lon],zoom);
-        L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{maxZoom:19}).addTo(deMiniMap);
-        deMiniMap.on("click",e=>setDeMiniPin(e.latlng.lat,e.latlng.lng));
-      }
+    const latVal=parseCoord(document.getElementById("de-lat").value);
+    const lonVal=parseCoord(document.getElementById("de-lon").value);
+    const hasPin=!isNaN(latVal)&&!isNaN(lonVal);
+    const lat=hasPin?latVal:15,lon=hasPin?lonVal:108.4,zoom=hasPin?13:7;
+    if(!deMiniMap){
+      deMiniMap=L.map("de-mini-map",{zoomControl:false}).setView([lat,lon],zoom);
+      L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{maxZoom:19}).addTo(deMiniMap);
+      deMiniMap.on("click",e=>setDeMiniPin(e.latlng.lat,e.latlng.lng));
+    }
+    const refresh=()=>{
+      if(!deMiniMap)return;
       deMiniMap.invalidateSize();
-      deMiniMap.setView([lat,lon],zoom);
+      deMiniMap.setView([lat,lon],zoom,{animate:false});
       if(deMiniMarker){deMiniMap.removeLayer(deMiniMarker);deMiniMarker=null;}
-      if(document.getElementById("de-lat").value&&document.getElementById("de-lon").value){
-        deMiniMarker=L.marker([lat,lon]).addTo(deMiniMap);
-      }
-    },180);
+      if(hasPin)deMiniMarker=L.marker([lat,lon]).addTo(deMiniMap);
+    };
+    setTimeout(refresh,120);
+    setTimeout(()=>deMiniMap&&deMiniMap.invalidateSize(),380);
   }
 }
 
@@ -683,13 +706,13 @@ function setDeMiniPin(lat,lon){
   if(deMiniMap){
     if(deMiniMarker)deMiniMap.removeLayer(deMiniMarker);
     deMiniMarker=L.marker([lat,lon]).addTo(deMiniMap);
-    deMiniMap.setView([lat,lon],Math.max(deMiniMap.getZoom(),13));
+    deMiniMap.setView([lat,lon],Math.max(deMiniMap.getZoom(),13),{animate:false});
   }
 }
 
 async function fillDayEndGPS(){
   const btn=document.getElementById("btn-de-gps");
-  const old=btn.textContent;btn.textContent="⏳...";btn.disabled=true;
+  const old=btn.textContent;btn.textContent="⏳ Đang lấy GPS...";btn.disabled=true;
   try{
     const pos=await getGPS();
     st.my_pos=pos;
@@ -715,9 +738,9 @@ function saveDayEnd(){
     st.day_end_points[deTargetDay]={type:"hotel",name:h.name,lat:h.lat,lon:h.lon,province:h.province};
   }else if(m==="custom"){
     const name=document.getElementById("de-name").value.trim()||"Điểm nghỉ tuỳ chỉnh";
-    const lat=parseFloat(document.getElementById("de-lat").value);
-    const lon=parseFloat(document.getElementById("de-lon").value);
-    if(isNaN(lat)||isNaN(lon)){alert("Vui lòng chọn toạ độ trên bản đồ, bấm GPS hoặc nhập toạ độ!");return;}
+    const lat=parseCoord(document.getElementById("de-lat").value);
+    const lon=parseCoord(document.getElementById("de-lon").value);
+    if(isNaN(lat)||isNaN(lon)){alert("Vui lòng chọn toạ độ trên bản đồ, bấm GPS hoặc nhập toạ độ hợp lệ!");return;}
     st.day_end_points[deTargetDay]={type:"custom",name,lat,lon};
     if(document.getElementById("de-save-hotel").checked&&!st.raw.hotels.some(h=>h.name===name)){
       st.raw.hotels.push({name,lat,lon,province:guessProv(lat,lon)});
@@ -727,16 +750,16 @@ function saveDayEnd(){
   localStorage.setItem("lt_day_ends",JSON.stringify(st.day_end_points));
   st.excel_src="optimize";
   localStorage.setItem("lt_src","optimize");
-  document.getElementById("day-end-dialog").close();
+  closeDlg("day-end-dialog");
   refreshAll();
   toast(deTargetDay===0?"🚩 Đã cập nhật điểm xuất phát Ngày 1":`📍 Đã cập nhật điểm cuối Ngày ${deTargetDay}`);
 }
 
 // ── QUẢN LÝ KHÁCH SẠN ──────────────────────────────────────
 function openHotelsManager(){
-  document.getElementById("settings-dialog").close();
+  closeDlg("settings-dialog");
   renderHotelsManager();
-  document.getElementById("hotels-dialog").showModal();
+  openDlg("hotels-dialog");
 }
 
 function renderHotelsManager(){
@@ -760,7 +783,7 @@ function renderHotelsManager(){
 
 function editHotel(idx){
   const h=st.raw.hotels[idx];if(!h)return;
-  document.getElementById("hotels-dialog").close();
+  closeDlg("hotels-dialog");
   openPointDialog("hotel",h);
 }
 
@@ -791,7 +814,7 @@ function openNoteDialog(stt){
   document.getElementById("note-shop-name").textContent=s.name;
   document.getElementById("note-shop-time").textContent=ci?.time?`Đã check-in lúc ${ci.time}`:"Sẽ tự động đánh dấu Check-in khi lưu";
   document.getElementById("note-text").value=ci?.note||"";
-  document.getElementById("note-dialog").showModal();
+  openDlg("note-dialog");
 }
 
 function saveNote(){
@@ -800,7 +823,7 @@ function saveNote(){
   const note=document.getElementById("note-text").value.trim();
   st.checkins[noteShopName]={done:true,time:existing?.time||nowHHMM(),note};
   localStorage.setItem("lt_ci",JSON.stringify(st.checkins));
-  document.getElementById("note-dialog").close();
+  closeDlg("note-dialog");
   renderUI();renderMap();
   toast("📝 Đã lưu ghi chú!");
 }
@@ -809,14 +832,13 @@ function uncheckFromNote(){
   if(!noteShopName)return;
   delete st.checkins[noteShopName];
   localStorage.setItem("lt_ci",JSON.stringify(st.checkins));
-  document.getElementById("note-dialog").close();
+  closeDlg("note-dialog");
   renderUI();renderMap();
   toast("⬜ Đã huỷ Check-in");
 }
 
 // ── TỐI ƯU TUYẾN ───────────────────────────────────────────
 function openOptimize(){
-  const dlg=document.getElementById("opt-dialog");
   const sel=document.getElementById("opt-start");
   sel.innerHTML='<option value="">-- Mặc định (KS ngày trước / điểm đầu) --</option><option value="__GPS__">📍 Vị trí GPS hiện tại của tôi</option>';
   st.raw.hotels.forEach(h=>{sel.innerHTML+=`<option value="${escHtml(h.name)}">${escHtml(h.name)} (KS)</option>`;});
@@ -825,7 +847,7 @@ function openOptimize(){
   sd.innerHTML='<option value="0">Toàn bộ lịch trình</option>';
   for(let d=1;d<=totalDays;d++) sd.innerHTML+=`<option value="${d}">Chỉ ngày ${d}</option>`;
   document.getElementById("opt-info").innerHTML='Nhấn <strong>Chạy tối ưu</strong> để phân tích, sắp xếp và lưu lại tuyến đường tốt nhất.';
-  dlg.showModal();
+  openDlg("opt-dialog");
 }
 
 async function runOptimize(){
@@ -1010,7 +1032,7 @@ function renderUI(){
     const h=st.hotels_by_day[st.sel_day];
     const hasNext=st.sel_day<totalDays;
     const subTxt=h?(h.type==="last_shop"?"Tại cửa hàng cuối ngày":`~${(h.dist||0).toFixed(1)} km từ điểm cuối`):"Tại điểm cuối cùng của ngày";
-    const hu=h?.lat?`https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}&travelmode=driving`:"#";
+    const hu=h?.lat!=null?`https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}&travelmode=driving`:"#";
     const hIdx=h?st.raw.hotels.findIndex(x=>x.name===h.name):-1;
     html+=`<div class="shop-card hotel-card">
       <div class="shop-top">
@@ -1022,7 +1044,7 @@ function renderUI(){
         <span class="shop-time hotel">${hasNext?`Bắt đầu N${st.sel_day+1}`:"Nghỉ đêm"}</span>
       </div>
       <div class="shop-acts">
-        ${h?.lat&&h.type!=="last_shop"?`<a class="btn-sm green" href="${hu}" target="_blank">🧭 Đường</a>`:""}
+        ${h?.lat!=null&&h.type!=="last_shop"?`<a class="btn-sm green" href="${hu}" target="_blank">🧭 Đường</a>`:""}
         <button class="btn-sm" onclick="openDayEndDialog(${st.sel_day})">📍 Đổi điểm cuối${hasNext?` / BĐ N${st.sel_day+1}`:""}</button>
         ${hIdx>=0?`<button class="btn-sm compact" title="Sửa KS" onclick="editHotel(${hIdx})">✏️</button><button class="btn-sm compact red" title="Xoá KS" onclick="deleteHotel(${hIdx})">🗑️</button>`:""}
       </div>
@@ -1048,7 +1070,7 @@ function openSettings(){
   document.getElementById("cfg-max").value=st.max_shops;
   document.getElementById("cfg-src").value=st.excel_src;
   document.getElementById("cfg-hotel-cnt").textContent=st.raw.hotels.length;
-  document.getElementById("settings-dialog").showModal();
+  openDlg("settings-dialog");
 }
 function onCfgModeChange(){const m=document.getElementById("cfg-mode").value;document.getElementById("cfg-max").value=MODES[m]?.max||4;}
 function saveSettings(){
@@ -1057,7 +1079,7 @@ function saveSettings(){
   st.max_shops=mv>0?mv:(MODES[st.mode]?.max||4);
   st.excel_src=document.getElementById("cfg-src").value;
   localStorage.setItem("lt_mode",st.mode);localStorage.setItem("lt_max",String(st.max_shops));localStorage.setItem("lt_src",st.excel_src);
-  document.getElementById("settings-dialog").close();
+  closeDlg("settings-dialog");
   st.sel_day=1;refreshAll();
   toast("⚙️ Đã lưu cài đặt");
 }
@@ -1071,9 +1093,16 @@ function resetData(){
 function clearCheckins(){
   if(!confirm("Xoá toàn bộ Check-in & ghi chú?"))return;
   st.checkins={};localStorage.removeItem("lt_ci");
-  document.getElementById("settings-dialog").close();refreshAll();
+  closeDlg("settings-dialog");refreshAll();
   toast("🧹 Đã xoá toàn bộ Check-in");
 }
+
+// ── Cuộn ô đang nhập vào tầm nhìn trên mobile ─────────────
+document.addEventListener("focusin",e=>{
+  if(/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)&&e.target.closest(".modal")){
+    setTimeout(()=>e.target.scrollIntoView({block:"center",behavior:"smooth"}),250);
+  }
+});
 
 // ── Kéo-thả Excel & Phím tắt Desktop ───────────────────────
 const dropOv=document.getElementById("drop-overlay");
@@ -1088,6 +1117,9 @@ window.addEventListener("drop",e=>{
 });
 
 window.addEventListener("keydown",e=>{
+  if(e.key==="Escape"){
+    document.querySelectorAll(".modal.open").forEach(m=>m.classList.remove("open"));
+  }
   if(e.key==="/"&&!/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)){
     e.preventDefault();document.getElementById("search-input").focus();
   }

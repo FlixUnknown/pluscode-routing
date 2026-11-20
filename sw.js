@@ -1,4 +1,4 @@
-const APP_CACHE = "lt-app-v1";
+const APP_CACHE = "lt-app-v2";
 const TILE_CACHE = "lt-tiles-v1";
 
 const APP_SHELL = [
@@ -11,6 +11,7 @@ const APP_SHELL = [
 
 const CDN_ASSETS = [
   "https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css",
   "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"
 ];
@@ -46,7 +47,6 @@ self.addEventListener("fetch", (event) => {
   if (req.method !== "GET") return;
   const url = new URL(req.url);
 
-  // Tile bản đồ: ưu tiên cache, không có thì tải và lưu lại
   if (url.hostname.includes("arcgisonline.com") || url.hostname.includes("openstreetmap.org")) {
     event.respondWith((async () => {
       const cache = await caches.open(TILE_CACHE);
@@ -65,7 +65,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Thư viện CDN cố định phiên bản: Cache-first
   if (CDN_ASSETS.includes(req.url)) {
     event.respondWith((async () => {
       const cache = await caches.open(APP_CACHE);
@@ -80,7 +79,6 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // File ứng dụng cùng domain: Network-first để nhận bản cập nhật mới từ GitHub ngay, mất mạng dùng cache
   if (url.origin === location.origin) {
     event.respondWith((async () => {
       const cache = await caches.open(APP_CACHE);
