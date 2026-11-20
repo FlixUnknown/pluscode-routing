@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no,viewport-fit=cover"/>
+  <meta name="referrer" content="strict-origin-when-cross-origin"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+  <meta name="apple-mobile-web-app-title" content="Lộ Trình KD"/>
+  <meta name="theme-color" content="#0f4c81"/>
+  <title>Lộ Trình Kinh Doanh</title>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Lộ Trình Kinh Doanh</h1>
+    <small id="sub-title">08:00–17:00 · Nghỉ trưa 11:00–13:00</small>
+  </div>
+  <div class="hdr-btns">
+    <button class="btn-icon" onclick="document.getElementById('excel-input').click()">📂 Nhập</button>
+    <button class="btn-icon teal" onclick="exportExcel()">📤 Xuất</button>
+    <button class="btn-icon accent" onclick="openPointDialog('shop')">➕ Điểm</button>
+    <button class="btn-icon" onclick="openSettings()">⚙️</button>
+    <input id="excel-input" type="file" accept=".xlsx,.xls" hidden/>
+  </div>
+</header>
+
+<div id="workspace">
+  <div id="map-wrap">
+    <div id="map"></div>
+    <button class="map-gps-btn map-expand-btn mob-only" id="btn-map-exp" title="Phóng to / Thu nhỏ" onclick="toggleMapExpand()">⤢</button>
+    <button class="map-gps-btn" title="Vị trí GPS hiện tại" onclick="locateMeOnMap()">📍</button>
+  </div>
+
+  <div id="side-panel">
+    <div class="toolbar">
+      <div class="seg">
+        <button id="btn-xemay" class="seg-btn" onclick="switchMode('xemay')">🛵 Xe máy</button>
+        <button id="btn-oto" class="seg-btn" onclick="switchMode('oto')">🚗 Ô tô</button>
+      </div>
+      <div class="stats">
+        <span class="stat-pill" id="stat-shops">0 điểm</span>
+        <span class="stat-pill" id="stat-days">0 ngày</span>
+        <span class="stat-pill" id="stat-km">0 km</span>
+        <button class="stat-pill mob-only" id="btn-map-tog" style="border:none;cursor:pointer;" onclick="toggleMapMobile()">🗺️ Ẩn</button>
+        <span class="stat-pill warn" id="stat-dup" style="display:none;" onclick="showDuplicates()"></span>
+      </div>
+    </div>
+
+    <div class="day-tabs" id="day-tabs"></div>
+
+    <div class="search-bar">
+      <div class="search-wrap">
+        <input id="search-input" type="text" placeholder="🔍 Tìm tên, tỉnh... (phím /)" oninput="onSearchInput()"/>
+        <button id="search-clear" class="search-clear" onclick="clearSearch()">✕</button>
+      </div>
+      <select id="filter-status" class="filter-sel" onchange="onFilterChange()">
+        <option value="all">Tất cả</option>
+        <option value="todo">⬜ Chưa ghé</option>
+        <option value="done">✅ Đã ghé</option>
+      </select>
+      <div class="prog-box">
+        <span class="prog-txt" id="prog-txt">✅ 0/0</span>
+        <div class="prog-track"><div class="prog-fill" id="prog-fill"></div></div>
+      </div>
+    </div>
+
+    <div class="act-strip">
+      <button class="btn btn-nav" onclick="navigateNext()">🧭 Điểm tiếp theo</button>
+      <button class="btn btn-route" onclick="navigateDay()">🗺️ Tuyến ngày</button>
+      <button class="btn btn-opt" onclick="openOptimize()">⚡ Tối ưu</button>
+    </div>
+
+    <div class="list" id="schedule-list"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+<div id="drop-overlay" class="drop-overlay">📂 Thả file Excel (.xlsx) vào đây để nạp</div>
+
+<!-- DIALOG THÊM / SỬA SHOP & KHÁCH SẠN -->
+<dialog id="point-dialog">
+  <div class="dlg-head">
+    <span id="pt-dlg-title">➕ Thêm Điểm Mới</span>
+  </div>
+  <div class="dlg-body">
+    <div class="field" id="pt-type-wrap">
+      <div class="seg" style="width:100%;">
+        <button type="button" id="pt-type-shop" class="seg-btn active" style="flex:1;" onclick="setPointType('shop')">🏪 Cửa hàng</button>
+        <button type="button" id="pt-type-hotel" class="seg-btn" style="flex:1;" onclick="setPointType('hotel')">🏨 Khách sạn</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Tên</label>
+      <input id="pt-name" type="text" placeholder="Tên cửa hàng / khách sạn" autocomplete="off" oninput="onPointNameInput()"/>
+      <div class="suggest-box" id="pt-suggest"></div>
+    </div>
+    <div class="field">
+      <label>Tỉnh / Thành</label>
+      <input id="pt-province" type="text" placeholder="Quảng Nam, Kon Tum..."/>
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;">
+      <div class="field" style="flex:1;">
+        <label>Vĩ độ (lat)</label>
+        <input id="pt-lat" type="number" step="0.000001" placeholder="15.5736"/>
+      </div>
+      <div class="field" style="flex:1;">
+        <label>Kinh độ (lon)</label>
+        <input id="pt-lon" type="number" step="0.000001" placeholder="108.474"/>
+      </div>
+      <div class="field">
+        <button type="button" class="btn-sm green" id="btn-pt-gps" onclick="fillPointGPS()">📍 GPS</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>Hoặc chạm vào bản đồ bên dưới để chọn vị trí:</label>
+      <div id="add-mini-map" style="height:160px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn-sm red" id="pt-del-btn" style="display:none;margin-right:auto;" onclick="deleteEditingPoint()">🗑️ Xoá</button>
+    <button class="btn-sm" onclick="document.getElementById('point-dialog').close()">Huỷ</button>
+    <button class="btn-sm green" id="pt-save-btn" onclick="savePoint()">✅ Lưu điểm</button>
+  </div>
+</dialog>
+
+<!-- DIALOG GHI CHÚ CHECK-IN -->
+<dialog id="note-dialog">
+  <div class="dlg-head">📝 Check-in & Ghi chú</div>
+  <div class="dlg-body">
+    <div style="font-weight:700;margin-bottom:6px;" id="note-shop-name"></div>
+    <div style="font-size:12px;color:var(--muted);margin-bottom:12px;" id="note-shop-time"></div>
+    <div class="field">
+      <label>Ghi chú thực tế (đơn hàng, hẹn lại, đóng cửa...)</label>
+      <textarea id="note-text" rows="3" placeholder="Ví dụ: Đã chốt đơn 5tr, hẹn giao thứ 5..."></textarea>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn-sm red" onclick="uncheckFromNote()">Huỷ Check-in</button>
+    <button class="btn-sm" onclick="document.getElementById('note-dialog').close()">Đóng</button>
+    <button class="btn-sm green" onclick="saveNote()">💾 Lưu ghi chú</button>
+  </div>
+</dialog>
+
+<!-- DIALOG QUẢN LÝ KHÁCH SẠN -->
+<dialog id="hotels-dialog">
+  <div class="dlg-head">🏨 Danh sách Khách sạn</div>
+  <div class="dlg-body" id="hotels-list-body"></div>
+  <div class="dlg-foot">
+    <button class="btn-sm green" onclick="document.getElementById('hotels-dialog').close();openPointDialog('hotel')">➕ Thêm KS</button>
+    <button class="btn-sm" onclick="document.getElementById('hotels-dialog').close()">Đóng</button>
+  </div>
+</dialog>
+
+<!-- DIALOG CÀI ĐẶT -->
+<dialog id="settings-dialog">
+  <div class="dlg-head">⚙️ Cài đặt</div>
+  <div class="dlg-body">
+    <div class="field">
+      <label>Phương tiện mặc định</label>
+      <select id="cfg-mode" onchange="onCfgModeChange()">
+        <option value="xemay">🛵 Xe máy (35 km/h · 4 điểm/ngày)</option>
+        <option value="oto">🚗 Ô tô (40 km/h · 6 điểm/ngày)</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Số cửa hàng tối đa / ngày</label>
+      <input id="cfg-max" type="number" min="1" max="20"/>
+    </div>
+    <div class="field">
+      <label>Nguồn Excel</label>
+      <select id="cfg-src">
+        <option value="optimize">Tối ưu từ CuaHang + KhachSan</option>
+        <option value="lichtrinh">Đọc sẵn sheet LichTrinh</option>
+      </select>
+    </div>
+    <div class="field" style="display:flex;gap:8px;">
+      <button type="button" class="btn-sm" onclick="openHotelsManager()">🏨 DS Khách sạn (<span id="cfg-hotel-cnt">0</span>)</button>
+      <button type="button" class="btn-sm green" onclick="downloadSampleExcel()">📋 File Excel mẫu</button>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn-sm" onclick="resetData()">Reset</button>
+    <button class="btn-sm red" onclick="clearCheckins()">Xoá Check-in</button>
+    <button class="btn-sm green" onclick="saveSettings()">Lưu</button>
+  </div>
+</dialog>
+
+<!-- DIALOG TỐI ƯU -->
+<dialog id="opt-dialog">
+  <div class="dlg-head">⚡ Tối ưu Tuyến Đường</div>
+  <div class="dlg-body">
+    <div class="opt-info" id="opt-info">Nhấn <strong>Chạy tối ưu</strong> để phân tích, sắp xếp và lưu lại tuyến đường tốt nhất.</div>
+    <div class="field">
+      <label>Điểm xuất phát hôm nay</label>
+      <select id="opt-start">
+        <option value="">-- Từ điểm đầu danh sách --</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Chỉ tối ưu ngày</label>
+      <select id="opt-day">
+        <option value="0">Toàn bộ lịch trình</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Thuật toán</label>
+      <select id="opt-algo">
+        <option value="province">Theo tỉnh → NN + 2-opt (khuyến nghị)</option>
+        <option value="nn2opt">Nearest Neighbor + 2-opt (xuyên tỉnh)</option>
+      </select>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn-sm" onclick="document.getElementById('opt-dialog').close()">Đóng</button>
+    <button class="btn-sm green" id="btn-run-opt" onclick="runOptimize()">⚡ Chạy tối ưu</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
