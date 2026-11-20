@@ -1,17 +1,9 @@
-// ── Manifest tự inject ─────────────────────────────────────
-(function injectManifest(){
-  const svg=`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="36" fill="#0f4c81"/><text x="96" y="124" font-size="92" text-anchor="middle" fill="#fff">🧭</text></svg>`;
-  const iconUrl="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svg);
-  const manifest={
-    name:"Lộ Trình Kinh Doanh",short_name:"Lộ Trình KD",start_url:".",
-    display:"standalone",background_color:"#f3f6fa",theme_color:"#0f4c81",
-    icons:[{src:iconUrl,sizes:"192x192",type:"image/svg+xml",purpose:"any maskable"}]
-  };
-  const link=document.createElement("link");
-  link.rel="manifest";
-  link.href="data:application/manifest+json;charset=utf-8,"+encodeURIComponent(JSON.stringify(manifest));
-  document.head.appendChild(link);
-})();
+// ── Service Worker Offline ─────────────────────────────────
+if("serviceWorker" in navigator && location.protocol.startsWith("http")){
+  window.addEventListener("load",()=>{
+    navigator.serviceWorker.register("./sw.js").catch(()=>{});
+  });
+}
 
 // ── Hằng số & Helpers ──────────────────────────────────────
 const EAR=6371,ROAD=1.35,SVC=30,WS=480,LS=660,LE=780,WE=1020;
@@ -24,7 +16,22 @@ let toastTimer=null;
 function toast(msg){
   const el=document.getElementById("toast");if(!el)return;
   el.textContent=msg;el.classList.add("show");
-  clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("show"),2400);
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove("show"),2600);
+}
+
+function dedupeNames(items){
+  const used=new Set();let renamed=0;
+  const out=items.map(item=>{
+    let nm=item.name;
+    if(!used.has(nm)){used.add(nm);return item;}
+    renamed++;
+    let n=2;
+    while(used.has(`${item.name} (${n})`))n++;
+    nm=`${item.name} (${n})`;
+    used.add(nm);
+    return{...item,name:nm};
+  });
+  return{items:out,renamed};
 }
 
 // ── State ───────────────────────────────────────────────────
@@ -47,6 +54,7 @@ const st={
     {name:"KS CenDeluxe TuyHoa",lon:109.310,lat:13.091,province:"Phú Yên"}
   ],precomputed:[]}),
   custom_order:ldj("lt_order",null),
+  day_end_points:ldj("lt_day_ends",{}),
   schedule:[],hotels_by_day:{},
   sel_day:1,search:"",status_filter:"all",
   checkins:ldj("lt_ci",{}),
@@ -82,6 +90,13 @@ function renderMap(){
   if(lpoly){lmap.removeLayer(lpoly);lpoly=null;}
   const stops=visibleStops(); if(!stops.length)return;
   const pts=[];
+  if(!st.search&&st.status_filter==="all"&&st.sel_day===1&&st.day_end_points[0]?.lat){
+    const s0=st.day_end_points[0];
+    const sm=L.marker([s0.lat,s0.lon],{icon:mkIcon("S","#2563eb",false)})
+      .bindPopup(`<strong>🚩 Xuất phát Ngày 1</strong><br/>${escHtml(s0.name)}`)
+      .addTo(lmap);
+    lmarkers.push(sm); pts.push([s0.lat,s0.lon]);
+  }
   stops.forEach(s=>{
     const ci=getCI(s.name);
     const m=L.marker([s.lat,s.lon],{icon:mkIcon(s.stt,"#0f4c81",!!ci)})
@@ -90,7 +105,7 @@ function renderMap(){
     lmarkers.push(m); lmarkerByStt[s.stt]=m; pts.push([s.lat,s.lon]);
   });
   const h=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.hotels_by_day[st.sel_day]:null;
-  if(h?.lat&&h?.lon){
+  if(h?.lat&&h?.lon&&h.type!=="last_shop"){
     const hm=L.marker([h.lat,h.lon],{icon:mkIcon("H","#e67e22",false)})
       .bindPopup(`<strong>🏨 ${escHtml(h.name)}</strong><br/>Cách điểm cuối ~${(h.dist||0).toFixed(1)} km<br/><a class="popup-nav" href="https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}&travelmode=driving" target="_blank">🧭 Chỉ đường</a>`)
       .addTo(lmap);
@@ -196,8 +211,26 @@ function routeByProvince(shops,from=null){
 function nearestHotel(s,hotels){
   if(!hotels?.length)return null;
   let best=null,md=Infinity;
-  for(const h of hotels){const d=rdist(s.lat,s.lon,h.lat,h.lon);if(d<md){md=d;best={...h,dist:d};}}
+  for(const h of hotels){const d=rdist(s.lat,s.lon,h.lat,h.lon);if(d<md){md=d;best={...h,dist:d,type:"hotel"};}}
   return best;
+}
+
+function resolveDayEnd(day,lastShop,hotels){
+  const ov=st.day_end_points[day];
+  if(ov){
+    if(ov.type==="last_shop"){
+      return{name:lastShop.name,lat:lastShop.lat,lon:lastShop.lon,dist:0,type:"last_shop"};
+    }
+    if(ov.lat!=null&&ov.lon!=null){
+      if(ov.type==="hotel"){
+        const mh=hotels.find(h=>h.name===ov.name);
+        const h=mh||ov;
+        return{name:h.name,lat:h.lat,lon:h.lon,province:h.province||"",dist:rdist(lastShop.lat,lastShop.lon,h.lat,h.lon),type:"hotel"};
+      }
+      return{name:ov.name||"Điểm tuỳ chỉnh",lat:ov.lat,lon:ov.lon,dist:rdist(lastShop.lat,lastShop.lon,ov.lat,ov.lon),type:"custom"};
+    }
+  }
+  return nearestHotel(lastShop,hotels);
 }
 
 const fmt=m=>{const v=Math.round(m);return String(Math.floor(v/60)).padStart(2,"0")+":"+String(v%60).padStart(2,"0");};
@@ -229,7 +262,7 @@ function showDuplicates(){
 
 function buildSchedule(customOrder=null){
   const{shops,hotels,precomputed}=st.raw;
-  findDuplicates(shops);
+  findDuplicates(shops.length?shops:precomputed);
   if(customOrder){
     st.custom_order=customOrder.map(s=>s.name);
     localStorage.setItem("lt_order",JSON.stringify(st.custom_order));
@@ -239,7 +272,7 @@ function buildSchedule(customOrder=null){
     precomputed.forEach(x=>{
       if(x.nightHotel){
         const mh=hotels.find(h=>h.name===x.nightHotel);
-        st.hotels_by_day[x.day]={name:x.nightHotel,dist:x.hotelDist||0,lat:mh?.lat,lon:mh?.lon};
+        st.hotels_by_day[x.day]={name:x.nightHotel,dist:x.hotelDist||0,lat:mh?.lat,lon:mh?.lon,type:"hotel"};
       }
     });
     return;
@@ -254,7 +287,7 @@ function buildSchedule(customOrder=null){
     st.custom_order.forEach(n=>{if(map.has(n)){ordered.push(map.get(n));used.add(n);}});
     pool.forEach(s=>{if(!used.has(s.name))ordered.push({...s});});
   }else{
-    ordered=routeByProvince(shops.map(s=>({...s})));
+    ordered=routeByProvince(shops.map(s=>({...s})),st.day_end_points[0]||null);
   }
 
   const prof=MODES[st.mode]||MODES.xemay;
@@ -262,13 +295,22 @@ function buildSchedule(customOrder=null){
   const sch=[],hbd={};let day=1,cnt=0,cur=WS,prev=null;
   ordered.forEach((s,idx)=>{
     if(idx===0){
-      sch.push({...s,stt:1,day,distKm:0,arriveTime:fmt(WS),departTime:fmt(WS+SVC)});
-      cur=WS+SVC;cnt=1;prev=s;return;
+      const sp0=st.day_end_points[0];
+      if(sp0?.lat!=null&&sp0?.lon!=null){
+        const d0=rdist(sp0.lat,sp0.lon,s.lat,s.lon);
+        const m0=(d0/prof.spd)*60;const o0=adv(WS,m0);
+        sch.push({...s,stt:1,day,distKm:d0,arriveTime:fmt(o0.arrive),departTime:fmt(o0.depart)});
+        cur=o0.depart;
+      }else{
+        sch.push({...s,stt:1,day,distKm:0,arriveTime:fmt(WS),departTime:fmt(WS+SVC)});
+        cur=WS+SVC;
+      }
+      cnt=1;prev=s;return;
     }
     const dist=rdist(prev.lat,prev.lon,s.lat,s.lon);
     const tmn=(dist/prof.spd)*60;const cand=adv(cur,tmn);
     if(cnt>=mx||cand.depart>WE){
-      hbd[day]=nearestHotel(sch[sch.length-1],hotels);
+      hbd[day]=resolveDayEnd(day,sch[sch.length-1],hotels);
       day++;cnt=1;
       const sp=hbd[day-1]||sch[sch.length-1];
       const md=rdist(sp.lat,sp.lon,s.lat,s.lon);const mm=(md/prof.spd)*60;const mo=adv(WS,mm);
@@ -279,7 +321,7 @@ function buildSchedule(customOrder=null){
       cur=cand.depart;cnt++;prev=s;
     }
   });
-  if(sch.length)hbd[day]=nearestHotel(sch[sch.length-1],hotels);
+  if(sch.length)hbd[day]=resolveDayEnd(day,sch[sch.length-1],hotels);
   st.schedule=sch;st.hotels_by_day=hbd;
 }
 
@@ -290,27 +332,55 @@ async function importExcelFile(f){
     const buf=await f.arrayBuffer();const wb=XLSX.read(buf,{type:"array"});
     const tr=n=>wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:null}):[];
     const pn=v=>{if(v===null||v===undefined||v==="")return NaN;if(typeof v==="number")return v;return parseFloat(String(v).replace(",",".").trim());};
-    const shops=tr("CuaHang").map(r=>({name:String(r["Tên cửa hàng"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(s=>s.name&&s.province&&!isNaN(s.lon)&&!isNaN(s.lat));
-    const hotels=tr("KhachSan").map(r=>({name:String(r["Tên khách sạn"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(h=>h.name&&!isNaN(h.lon)&&!isNaN(h.lat));
+    const rawShops=tr("CuaHang").map(r=>({name:String(r["Tên cửa hàng"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(s=>s.name&&s.province&&!isNaN(s.lon)&&!isNaN(s.lat));
+    const rawHotels=tr("KhachSan").map(r=>({name:String(r["Tên khách sạn"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),province:String(r["tỉnh"]||"").trim()})).filter(h=>h.name&&!isNaN(h.lon)&&!isNaN(h.lat));
     const ltRows=tr("LichTrinh");
-    const precomputed=ltRows.map((r,i)=>({stt:Number(r["STT"])||i+1,day:Number(r["Ngày"])||1,name:String(r["Tên cửa hàng"]||"").trim(),province:String(r["tỉnh"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),distKm:pn(r["Quãng đường (km)"])||0,nightHotel:r["Nghỉ đêm tại"]?String(r["Nghỉ đêm tại"]).trim():null,hotelDist:pn(r["Cách khách sạn (km)"])||0,arriveTime:r["Giờ đến"]?String(r["Giờ đến"]).trim():"--:--",departTime:r["Giờ đi"]?String(r["Giờ đi"]).trim():"--:--"})).filter(s=>s.name&&s.name!=="Nghỉ ngơi"&&!isNaN(s.lat)&&!isNaN(s.lon));
-    if(!shops.length&&!precomputed.length){alert("Không đọc được dữ liệu (cần sheet CuaHang hoặc LichTrinh)!");return;}
+    const rawPre=ltRows.map((r,i)=>({
+      stt:Number(r["STT"])||i+1,day:Number(r["Ngày"])||1,name:String(r["Tên cửa hàng"]||"").trim(),
+      province:String(r["tỉnh"]||"").trim(),lon:pn(r["kinh độ"]),lat:pn(r["vĩ độ"]),
+      distKm:pn(r["Quãng đường (km)"])||0,nightHotel:r["Nghỉ đêm tại"]?String(r["Nghỉ đêm tại"]).trim():null,
+      hotelDist:pn(r["Cách khách sạn (km)"])||0,
+      arriveTime:r["Giờ đến"]?String(r["Giờ đến"]).trim():"--:--",
+      departTime:r["Giờ đi"]?String(r["Giờ đi"]).trim():"--:--",
+      _ciStatus:String(r["Trạng thái Check-in"]||"").trim(),
+      _ciTime:String(r["Giờ Check-in"]||"").trim(),
+      _ciNote:String(r["Ghi chú"]||"").trim()
+    })).filter(s=>s.name&&s.name!=="Nghỉ ngơi"&&!isNaN(s.lat)&&!isNaN(s.lon));
+    if(!rawShops.length&&!rawPre.length){alert("Không đọc được dữ liệu (cần sheet CuaHang hoặc LichTrinh)!");return;}
 
-    ltRows.forEach(r=>{
-      const nm=String(r["Tên cửa hàng"]||"").trim();
-      const tt=String(r["Trạng thái Check-in"]||"").trim();
-      if(nm&&(tt==="Đã ghé"||tt==="✓"||tt==="true")){
-        st.checkins[nm]={done:true,time:String(r["Giờ Check-in"]||"").trim(),note:String(r["Ghi chú"]||"").trim()};
+    if(Object.keys(st.checkins).length>0){
+      if(confirm("Bạn có muốn xoá toàn bộ trạng thái Check-in & ghi chú cũ trước khi nạp file Excel mới không?\n\n• OK: Xoá cũ, dùng dữ liệu mới sạch sẽ\n• Huỷ: Giữ lại Check-in cũ nếu trùng tên")){
+        st.checkins={};
+      }
+    }
+
+    const dShops=dedupeNames(rawShops);
+    const dHotels=dedupeNames(rawHotels);
+    const dPre=dedupeNames(rawPre);
+    let shops=dShops.items;
+    const hotels=dHotels.items;
+    const precomputed=dPre.items.map(({_ciStatus,_ciTime,_ciNote,...rest})=>rest);
+
+    if(!shops.length&&precomputed.length){
+      shops=precomputed.map(p=>({name:p.name,lon:p.lon,lat:p.lat,province:p.province}));
+    }
+
+    dPre.items.forEach(r=>{
+      if(r._ciStatus==="Đã ghé"||r._ciStatus==="✓"||r._ciStatus==="true"){
+        st.checkins[r.name]={done:true,time:r._ciTime,note:r._ciNote};
       }
     });
     localStorage.setItem("lt_ci",JSON.stringify(st.checkins));
 
     st.raw={shops,hotels,precomputed};
     st.custom_order=null;
+    st.day_end_points={};
     localStorage.removeItem("lt_order");
+    localStorage.removeItem("lt_day_ends");
     localStorage.setItem("lt_raw",JSON.stringify(st.raw));
     st.sel_day=1;refreshAll();
-    toast(`✅ Đã nạp ${shops.length||precomputed.length} điểm!`);
+    const renamedCnt=dShops.renamed+dHotels.renamed+dPre.renamed;
+    toast(`✅ Đã nạp ${shops.length||precomputed.length} điểm${renamedCnt?" (đã tự đánh số tên trùng)":""}!`);
   }catch(err){alert("Lỗi Excel: "+err.message);}
 }
 document.getElementById("excel-input").addEventListener("change",e=>{importExcelFile(e.target.files[0]);e.target.value="";});
@@ -333,7 +403,8 @@ function exportExcel(){
       "Trạng thái Check-in":ci?"Đã ghé":"Chưa ghé","Giờ Check-in":ci?.time||"","Ghi chú":ci?.note||""
     };
   });
-  const chData=st.raw.shops.map(s=>({"Tên cửa hàng":s.name,"tỉnh":s.province,"vĩ độ":s.lat,"kinh độ":s.lon}));
+  const srcShops=st.raw.shops.length?st.raw.shops:st.schedule;
+  const chData=srcShops.map(s=>({"Tên cửa hàng":s.name,"tỉnh":s.province,"vĩ độ":s.lat,"kinh độ":s.lon}));
   const ksData=st.raw.hotels.map(h=>({"Tên khách sạn":h.name,"tỉnh":h.province,"vĩ độ":h.lat,"kinh độ":h.lon}));
 
   const wb=XLSX.utils.book_new();
@@ -391,12 +462,11 @@ function openPointDialog(type,editItem=null){
       miniMap=L.map("add-mini-map",{zoomControl:false}).setView([cLat,cLon],zoom);
       L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{maxZoom:19}).addTo(miniMap);
       miniMap.on("click",e=>setMiniPin(e.latlng.lat,e.latlng.lng));
-    }else{
-      miniMap.setView([cLat,cLon],zoom);
     }
+    miniMap.invalidateSize();
+    miniMap.setView([cLat,cLon],zoom);
     if(miniMarker){miniMap.removeLayer(miniMarker);miniMarker=null;}
     if(editItem?.lat&&editItem?.lon)miniMarker=L.marker([editItem.lat,editItem.lon]).addTo(miniMap);
-    miniMap.invalidateSize();
   },200);
 }
 
@@ -492,6 +562,7 @@ function deleteEditingPoint(){
   if(!editTarget||!confirm(`Xoá "${editTarget.name}" khỏi danh sách?`))return;
   if(editTarget.type==="shop"){
     st.raw.shops=st.raw.shops.filter(s=>s.name!==editTarget.name);
+    st.raw.precomputed=st.raw.precomputed.filter(s=>s.name!==editTarget.name);
     if(st.custom_order){st.custom_order=st.custom_order.filter(n=>n!==editTarget.name);localStorage.setItem("lt_order",JSON.stringify(st.custom_order));}
     st.excel_src="optimize";localStorage.setItem("lt_src","optimize");
   }else{
@@ -507,6 +578,8 @@ function moveStop(stt,dir){
   const idx=st.schedule.findIndex(s=>s.stt===stt);
   const target=idx+dir;
   if(idx<0||target<0||target>=st.schedule.length)return;
+  const movedName=st.schedule[idx].name;
+  const oldDay=st.schedule[idx].day;
   const names=st.schedule.map(s=>s.name);
   [names[idx],names[target]]=[names[target],names[idx]];
   const pool=st.raw.shops.length?st.raw.shops:st.raw.precomputed;
@@ -514,8 +587,149 @@ function moveStop(stt,dir){
   const ordered=names.map(n=>map.get(n)).filter(Boolean);
   if(!ordered.length)return;
   st.excel_src="optimize";localStorage.setItem("lt_src","optimize");
-  buildSchedule(ordered);renderUI();renderMap();
-  toast(dir<0?"⬆️ Đã đẩy lên 1 bậc":"⬇️ Đã đẩy xuống 1 bậc");
+  buildSchedule(ordered);
+  const movedStop=st.schedule.find(s=>s.name===movedName);
+  if(movedStop&&st.sel_day!==0&&movedStop.day!==oldDay){
+    st.sel_day=movedStop.day;
+    toast(`📅 "${movedName}" đã chuyển sang Ngày ${movedStop.day}`);
+  }else{
+    toast(dir<0?"⬆️ Đã đẩy lên 1 bậc":"⬇️ Đã đẩy xuống 1 bậc");
+  }
+  renderUI();renderMap();
+}
+
+// ── ĐỔI ĐIỂM CUỐI NGÀY / ĐIỂM BẮT ĐẦU NGÀY SAU ─────────────
+let deTargetDay=1,deMiniMap=null,deMiniMarker=null;
+
+function openDayEndDialog(day){
+  deTargetDay=day;
+  const isDay1Start=(day===0);
+  document.getElementById("de-dlg-title").textContent=isDay1Start?"🚩 Điểm xuất phát Ngày 1":`📍 Điểm cuối Ngày ${day} → Bắt đầu Ngày ${day+1}`;
+  document.getElementById("de-desc").textContent=isDay1Start?"Chọn điểm xuất phát cho buổi sáng Ngày 1 (mặc định 08:00 tại điểm #1).":`Chọn điểm nghỉ đêm / kết thúc Ngày ${day}. Sáng Ngày ${day+1} sẽ xuất phát từ điểm này.`;
+
+  const modeSel=document.getElementById("de-mode");
+  if(isDay1Start){
+    modeSel.innerHTML=`
+      <option value="default">Mặc định (bắt đầu ngay tại điểm #1 lúc 08:00)</option>
+      <option value="hotel">Xuất phát từ một Khách sạn</option>
+      <option value="custom">Điểm tuỳ chỉnh (GPS / Bản đồ / Toạ độ)</option>`;
+  }else{
+    modeSel.innerHTML=`
+      <option value="default">Mặc định (Khách sạn gần điểm cuối nhất)</option>
+      <option value="last_shop">Ngay tại cửa hàng cuối cùng của Ngày ${day}</option>
+      <option value="hotel">Chọn Khách sạn khác trong danh sách</option>
+      <option value="custom">Thêm / Chọn điểm tuỳ chỉnh mới</option>`;
+  }
+
+  const hSel=document.getElementById("de-hotel");
+  hSel.innerHTML=st.raw.hotels.length
+    ? st.raw.hotels.map(h=>`<option value="${escHtml(h.name)}">${escHtml(h.name)} (${escHtml(h.province)})</option>`).join("")
+    : `<option value="">-- Chưa có khách sạn nào --</option>`;
+
+  const cur=st.day_end_points[day];
+  const dayStops=st.schedule.filter(s=>s.day===(isDay1Start?1:day));
+  const refPt=isDay1Start?(cur?.lat?cur:dayStops[0]):(cur?.lat?cur:(st.hotels_by_day[day]?.lat?st.hotels_by_day[day]:dayStops[dayStops.length-1]));
+
+  if(cur){
+    modeSel.value=cur.type||"custom";
+    if(cur.type==="hotel"&&cur.name)hSel.value=cur.name;
+    if(cur.type==="custom"){
+      document.getElementById("de-name").value=cur.name||"";
+      document.getElementById("de-lat").value=cur.lat??"";
+      document.getElementById("de-lon").value=cur.lon??"";
+    }else{
+      document.getElementById("de-name").value="";
+      document.getElementById("de-lat").value=refPt?.lat?Number(refPt.lat).toFixed(6):"";
+      document.getElementById("de-lon").value=refPt?.lon?Number(refPt.lon).toFixed(6):"";
+    }
+  }else{
+    modeSel.value="default";
+    document.getElementById("de-name").value="";
+    document.getElementById("de-lat").value=refPt?.lat?Number(refPt.lat).toFixed(6):"";
+    document.getElementById("de-lon").value=refPt?.lon?Number(refPt.lon).toFixed(6):"";
+  }
+  document.getElementById("de-save-hotel").checked=false;
+  onDayEndModeChange();
+  document.getElementById("day-end-dialog").showModal();
+}
+
+function onDayEndModeChange(){
+  const m=document.getElementById("de-mode").value;
+  document.getElementById("de-hotel-wrap").style.display=m==="hotel"?"block":"none";
+  document.getElementById("de-custom-wrap").style.display=m==="custom"?"block":"none";
+  if(m==="custom"){
+    setTimeout(()=>{
+      const lat=parseFloat(document.getElementById("de-lat").value)||15;
+      const lon=parseFloat(document.getElementById("de-lon").value)||108.4;
+      const zoom=document.getElementById("de-lat").value?13:7;
+      if(!deMiniMap){
+        deMiniMap=L.map("de-mini-map",{zoomControl:false}).setView([lat,lon],zoom);
+        L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{maxZoom:19}).addTo(deMiniMap);
+        deMiniMap.on("click",e=>setDeMiniPin(e.latlng.lat,e.latlng.lng));
+      }
+      deMiniMap.invalidateSize();
+      deMiniMap.setView([lat,lon],zoom);
+      if(deMiniMarker){deMiniMap.removeLayer(deMiniMarker);deMiniMarker=null;}
+      if(document.getElementById("de-lat").value&&document.getElementById("de-lon").value){
+        deMiniMarker=L.marker([lat,lon]).addTo(deMiniMap);
+      }
+    },180);
+  }
+}
+
+function setDeMiniPin(lat,lon){
+  document.getElementById("de-lat").value=Number(lat).toFixed(6);
+  document.getElementById("de-lon").value=Number(lon).toFixed(6);
+  if(deMiniMap){
+    if(deMiniMarker)deMiniMap.removeLayer(deMiniMarker);
+    deMiniMarker=L.marker([lat,lon]).addTo(deMiniMap);
+    deMiniMap.setView([lat,lon],Math.max(deMiniMap.getZoom(),13));
+  }
+}
+
+async function fillDayEndGPS(){
+  const btn=document.getElementById("btn-de-gps");
+  const old=btn.textContent;btn.textContent="⏳...";btn.disabled=true;
+  try{
+    const pos=await getGPS();
+    st.my_pos=pos;
+    setDeMiniPin(pos.lat,pos.lon);
+    if(!document.getElementById("de-name").value.trim()){
+      document.getElementById("de-name").value="Vị trí GPS";
+    }
+    toast("📍 Đã lấy tọa độ GPS hiện tại");
+  }catch(err){alert(err.message);}
+  finally{btn.textContent=old;btn.disabled=false;}
+}
+
+function saveDayEnd(){
+  const m=document.getElementById("de-mode").value;
+  if(m==="default"){
+    delete st.day_end_points[deTargetDay];
+  }else if(m==="last_shop"){
+    st.day_end_points[deTargetDay]={type:"last_shop"};
+  }else if(m==="hotel"){
+    const hn=document.getElementById("de-hotel").value;
+    const h=st.raw.hotels.find(x=>x.name===hn);
+    if(!h){alert("Vui lòng chọn một khách sạn hợp lệ!");return;}
+    st.day_end_points[deTargetDay]={type:"hotel",name:h.name,lat:h.lat,lon:h.lon,province:h.province};
+  }else if(m==="custom"){
+    const name=document.getElementById("de-name").value.trim()||"Điểm nghỉ tuỳ chỉnh";
+    const lat=parseFloat(document.getElementById("de-lat").value);
+    const lon=parseFloat(document.getElementById("de-lon").value);
+    if(isNaN(lat)||isNaN(lon)){alert("Vui lòng chọn toạ độ trên bản đồ, bấm GPS hoặc nhập toạ độ!");return;}
+    st.day_end_points[deTargetDay]={type:"custom",name,lat,lon};
+    if(document.getElementById("de-save-hotel").checked&&!st.raw.hotels.some(h=>h.name===name)){
+      st.raw.hotels.push({name,lat,lon,province:guessProv(lat,lon)});
+      localStorage.setItem("lt_raw",JSON.stringify(st.raw));
+    }
+  }
+  localStorage.setItem("lt_day_ends",JSON.stringify(st.day_end_points));
+  st.excel_src="optimize";
+  localStorage.setItem("lt_src","optimize");
+  document.getElementById("day-end-dialog").close();
+  refreshAll();
+  toast(deTargetDay===0?"🚩 Đã cập nhật điểm xuất phát Ngày 1":`📍 Đã cập nhật điểm cuối Ngày ${deTargetDay}`);
 }
 
 // ── QUẢN LÝ KHÁCH SẠN ──────────────────────────────────────
@@ -604,7 +818,7 @@ function uncheckFromNote(){
 function openOptimize(){
   const dlg=document.getElementById("opt-dialog");
   const sel=document.getElementById("opt-start");
-  sel.innerHTML='<option value="">-- Từ điểm đầu danh sách --</option><option value="__GPS__">📍 Vị trí GPS hiện tại của tôi</option>';
+  sel.innerHTML='<option value="">-- Mặc định (KS ngày trước / điểm đầu) --</option><option value="__GPS__">📍 Vị trí GPS hiện tại của tôi</option>';
   st.raw.hotels.forEach(h=>{sel.innerHTML+=`<option value="${escHtml(h.name)}">${escHtml(h.name)} (KS)</option>`;});
   const sd=document.getElementById("opt-day");
   const totalDays=st.schedule.reduce((m,s)=>Math.max(m,s.day),0);
@@ -625,12 +839,24 @@ async function runOptimize(){
     const old=btn.textContent;btn.textContent="⏳ Đang lấy GPS...";btn.disabled=true;
     try{
       const pos=await getGPS();
-      st.my_pos=pos;from=pos;
+      st.my_pos=pos;
+      from={lat:pos.lat,lon:pos.lon};
+      st.day_end_points[selDay>0?selDay-1:0]={type:"custom",name:"Vị trí GPS",lat:pos.lat,lon:pos.lon};
+      localStorage.setItem("lt_day_ends",JSON.stringify(st.day_end_points));
     }catch(err){alert(err.message);btn.textContent=old;btn.disabled=false;return;}
     btn.textContent=old;btn.disabled=false;
   }else if(startVal){
     const h=st.raw.hotels.find(x=>x.name===startVal);
-    if(h)from={lat:h.lat,lon:h.lon};
+    if(h){
+      from={lat:h.lat,lon:h.lon};
+      st.day_end_points[selDay>0?selDay-1:0]={type:"hotel",name:h.name,lat:h.lat,lon:h.lon,province:h.province};
+      localStorage.setItem("lt_day_ends",JSON.stringify(st.day_end_points));
+    }
+  }else if(selDay>1&&st.hotels_by_day[selDay-1]){
+    const prevEnd=st.hotels_by_day[selDay-1];
+    if(prevEnd.lat!=null&&prevEnd.lon!=null)from={lat:prevEnd.lat,lon:prevEnd.lon};
+  }else if(selDay<=1&&st.day_end_points[0]?.lat!=null){
+    from={lat:st.day_end_points[0].lat,lon:st.day_end_points[0].lon};
   }
 
   const shops=(st.raw.shops.length?st.raw.shops:st.raw.precomputed).map(s=>({...s}));
@@ -707,10 +933,11 @@ function navigateNext(){
 function navigateDay(){
   const stops=visibleStops();if(!stops.length)return;
   if(stops.length===1){window.open(navUrl(stops[0]),"_blank");return;}
-  if(stops.length>11&&!confirm(`Đang có ${stops.length} điểm. Google Maps chỉ hỗ trợ tối đa 11 điểm trên 1 tuyến.\n\nBạn có muốn mở 11 điểm đầu tiên không? (Mẹo: chọn từng Ngày để đi hết lộ trình)`))return;
-  const sl=stops.slice(0,11);
-  const wp=sl.slice(1,-1).map(s=>`${s.lat},${s.lon}`).join("|");
-  window.open(`https://www.google.com/maps/dir/?api=1&origin=${sl[0].lat},${sl[0].lon}&destination=${sl[sl.length-1].lat},${sl[sl.length-1].lon}${wp?`&waypoints=${encodeURIComponent(wp)}`:""}&travelmode=driving`,"_blank");
+  if(stops.length>10&&!confirm(`Đang có ${stops.length} điểm. Khi dẫn đường từ GPS hiện tại, Google Maps hỗ trợ tối đa 10 điểm dừng trên 1 tuyến.\n\nBạn có muốn mở 10 điểm đầu tiên không? (Mẹo: chọn từng Ngày để đi hết lộ trình)`))return;
+  const sl=stops.slice(0,10);
+  const dest=sl[sl.length-1];
+  const wp=sl.slice(0,-1).map(s=>`${s.lat},${s.lon}`).join("|");
+  window.open(`https://www.google.com/maps/dir/?api=1&destination=${dest.lat},${dest.lon}${wp?`&waypoints=${encodeURIComponent(wp)}`:""}&travelmode=driving`,"_blank");
 }
 
 // ── Render UI ───────────────────────────────────────────────
@@ -747,6 +974,15 @@ function renderUI(){
 
   const le=document.getElementById("schedule-list");
   let html="";
+
+  if(!st.search&&st.status_filter==="all"&&st.sel_day===1&&vis.length){
+    const s0=st.day_end_points[0];
+    html+=`<div class="start-strip">
+      <span>🚩 Xuất phát: <strong>${s0?.name?escHtml(s0.name):"Mặc định (tại điểm #1)"}</strong></span>
+      <button class="btn-sm compact" onclick="openDayEndDialog(0)">📍 Đổi</button>
+    </div>`;
+  }
+
   vis.forEach(s=>{
     const ci=getCI(s.name);
     html+=`<div class="shop-card${ci?" done":""}">
@@ -770,19 +1006,25 @@ function renderUI(){
     </div>`;
   });
 
-  if(!st.search&&st.status_filter==="all"&&st.sel_day!==0&&st.hotels_by_day[st.sel_day]){
+  if(!st.search&&st.status_filter==="all"&&st.sel_day!==0&&vis.length){
     const h=st.hotels_by_day[st.sel_day];
-    const hu=h.lat?`https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}&travelmode=driving`:"#";
-    const hIdx=st.raw.hotels.findIndex(x=>x.name===h.name);
+    const hasNext=st.sel_day<totalDays;
+    const subTxt=h?(h.type==="last_shop"?"Tại cửa hàng cuối ngày":`~${(h.dist||0).toFixed(1)} km từ điểm cuối`):"Tại điểm cuối cùng của ngày";
+    const hu=h?.lat?`https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}&travelmode=driving`:"#";
+    const hIdx=h?st.raw.hotels.findIndex(x=>x.name===h.name):-1;
     html+=`<div class="shop-card hotel-card">
       <div class="shop-top">
         <span class="badge hotel">H</span>
-        <div class="shop-info"><strong>🏨 ${escHtml(h.name)}</strong><div class="shop-meta">Nghỉ đêm · ~${(h.dist||0).toFixed(1)} km từ điểm cuối</div></div>
-        <span class="shop-time hotel">Nghỉ đêm</span>
+        <div class="shop-info">
+          <strong>${h?.type==="last_shop"?"📌":"🏨"} ${escHtml(h?.name||vis[vis.length-1].name)}</strong>
+          <div class="shop-meta">${hasNext?`Điểm cuối Ngày ${st.sel_day} & Bắt đầu Ngày ${st.sel_day+1}`:`Kết thúc Ngày ${st.sel_day}`} · ${subTxt}</div>
+        </div>
+        <span class="shop-time hotel">${hasNext?`Bắt đầu N${st.sel_day+1}`:"Nghỉ đêm"}</span>
       </div>
       <div class="shop-acts">
-        ${h.lat?`<a class="btn-sm green" href="${hu}" target="_blank">🧭 Chỉ đường</a>`:""}
-        ${hIdx>=0?`<button class="btn-sm compact" onclick="editHotel(${hIdx})">✏️</button><button class="btn-sm compact red" onclick="deleteHotel(${hIdx})">🗑️</button>`:""}
+        ${h?.lat&&h.type!=="last_shop"?`<a class="btn-sm green" href="${hu}" target="_blank">🧭 Đường</a>`:""}
+        <button class="btn-sm" onclick="openDayEndDialog(${st.sel_day})">📍 Đổi điểm cuối${hasNext?` / BĐ N${st.sel_day+1}`:""}</button>
+        ${hIdx>=0?`<button class="btn-sm compact" title="Sửa KS" onclick="editHotel(${hIdx})">✏️</button><button class="btn-sm compact red" title="Xoá KS" onclick="deleteHotel(${hIdx})">🗑️</button>`:""}
       </div>
     </div>`;
   }
@@ -820,9 +1062,10 @@ function saveSettings(){
   toast("⚙️ Đã lưu cài đặt");
 }
 function resetData(){
-  if(!confirm("Reset toàn bộ dữ liệu và thứ tự tối ưu?"))return;
+  if(!confirm("Reset toàn bộ dữ liệu, điểm xuất phát và thứ tự tối ưu?"))return;
   localStorage.removeItem("lt_raw");
   localStorage.removeItem("lt_order");
+  localStorage.removeItem("lt_day_ends");
   location.reload();
 }
 function clearCheckins(){

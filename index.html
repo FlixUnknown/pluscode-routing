@@ -10,6 +10,7 @@
   <meta name="apple-mobile-web-app-title" content="Lộ Trình KD"/>
   <meta name="theme-color" content="#0f4c81"/>
   <title>Lộ Trình Kinh Doanh</title>
+  <link rel="manifest" href="manifest.json"/>
   <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
@@ -87,6 +88,7 @@
 <dialog id="point-dialog">
   <div class="dlg-head">
     <span id="pt-dlg-title">➕ Thêm Điểm Mới</span>
+    <button type="button" class="dlg-close" onclick="document.getElementById('point-dialog').close()">✕</button>
   </div>
   <div class="dlg-body">
     <div class="field" id="pt-type-wrap">
@@ -129,9 +131,59 @@
   </div>
 </dialog>
 
+<!-- DIALOG ĐỔI ĐIỂM CUỐI NGÀY / ĐIỂM BẮT ĐẦU NGÀY SAU -->
+<dialog id="day-end-dialog">
+  <div class="dlg-head">
+    <span id="de-dlg-title">📍 Điểm bắt đầu ngày mới</span>
+    <button type="button" class="dlg-close" onclick="document.getElementById('day-end-dialog').close()">✕</button>
+  </div>
+  <div class="dlg-body">
+    <div class="opt-info" id="de-desc">Chọn điểm kết thúc ngày này (cũng là điểm xuất phát sáng hôm sau).</div>
+    <div class="field">
+      <label>Lựa chọn</label>
+      <select id="de-mode" onchange="onDayEndModeChange()"></select>
+    </div>
+    <div class="field" id="de-hotel-wrap" style="display:none;">
+      <label>Chọn Khách sạn</label>
+      <select id="de-hotel"></select>
+    </div>
+    <div id="de-custom-wrap" style="display:none;">
+      <div class="field">
+        <label>Tên điểm (nhà riêng, điểm nghỉ, điểm hẹn...)</label>
+        <input id="de-name" type="text" placeholder="Ví dụ: Nhà nghỉ Bình Minh / Điểm xuất phát"/>
+      </div>
+      <div style="display:flex;gap:8px;align-items:flex-end;">
+        <div class="field" style="flex:1;">
+          <label>Vĩ độ (lat)</label>
+          <input id="de-lat" type="number" step="0.000001" placeholder="15.5736"/>
+        </div>
+        <div class="field" style="flex:1;">
+          <label>Kinh độ (lon)</label>
+          <input id="de-lon" type="number" step="0.000001" placeholder="108.474"/>
+        </div>
+        <div class="field">
+          <button type="button" class="btn-sm green" id="btn-de-gps" onclick="fillDayEndGPS()">📍 GPS</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>Hoặc chạm vào bản đồ để chọn vị trí:</label>
+        <div id="de-mini-map" style="height:150px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
+        <label class="chk-inline"><input type="checkbox" id="de-save-hotel"/> Lưu thêm điểm này vào DS Khách sạn</label>
+      </div>
+    </div>
+  </div>
+  <div class="dlg-foot">
+    <button class="btn-sm" onclick="document.getElementById('day-end-dialog').close()">Huỷ</button>
+    <button class="btn-sm green" onclick="saveDayEnd()">💾 Áp dụng</button>
+  </div>
+</dialog>
+
 <!-- DIALOG GHI CHÚ CHECK-IN -->
 <dialog id="note-dialog">
-  <div class="dlg-head">📝 Check-in & Ghi chú</div>
+  <div class="dlg-head">
+    <span>📝 Check-in & Ghi chú</span>
+    <button type="button" class="dlg-close" onclick="document.getElementById('note-dialog').close()">✕</button>
+  </div>
   <div class="dlg-body">
     <div style="font-weight:700;margin-bottom:6px;" id="note-shop-name"></div>
     <div style="font-size:12px;color:var(--muted);margin-bottom:12px;" id="note-shop-time"></div>
@@ -149,7 +201,10 @@
 
 <!-- DIALOG QUẢN LÝ KHÁCH SẠN -->
 <dialog id="hotels-dialog">
-  <div class="dlg-head">🏨 Danh sách Khách sạn</div>
+  <div class="dlg-head">
+    <span>🏨 Danh sách Khách sạn</span>
+    <button type="button" class="dlg-close" onclick="document.getElementById('hotels-dialog').close()">✕</button>
+  </div>
   <div class="dlg-body" id="hotels-list-body"></div>
   <div class="dlg-foot">
     <button class="btn-sm green" onclick="document.getElementById('hotels-dialog').close();openPointDialog('hotel')">➕ Thêm KS</button>
@@ -159,7 +214,10 @@
 
 <!-- DIALOG CÀI ĐẶT -->
 <dialog id="settings-dialog">
-  <div class="dlg-head">⚙️ Cài đặt</div>
+  <div class="dlg-head">
+    <span>⚙️ Cài đặt</span>
+    <button type="button" class="dlg-close" onclick="document.getElementById('settings-dialog').close()">✕</button>
+  </div>
   <div class="dlg-body">
     <div class="field">
       <label>Phương tiện mặc định</label>
@@ -193,13 +251,16 @@
 
 <!-- DIALOG TỐI ƯU -->
 <dialog id="opt-dialog">
-  <div class="dlg-head">⚡ Tối ưu Tuyến Đường</div>
+  <div class="dlg-head">
+    <span>⚡ Tối ưu Tuyến Đường</span>
+    <button type="button" class="dlg-close" onclick="document.getElementById('opt-dialog').close()">✕</button>
+  </div>
   <div class="dlg-body">
     <div class="opt-info" id="opt-info">Nhấn <strong>Chạy tối ưu</strong> để phân tích, sắp xếp và lưu lại tuyến đường tốt nhất.</div>
     <div class="field">
-      <label>Điểm xuất phát hôm nay</label>
+      <label>Điểm xuất phát</label>
       <select id="opt-start">
-        <option value="">-- Từ điểm đầu danh sách --</option>
+        <option value="">-- Mặc định (KS ngày trước / điểm đầu) --</option>
       </select>
     </div>
     <div class="field">
