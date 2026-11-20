@@ -27,7 +27,8 @@
     <button class="btn-icon" onclick="document.getElementById('excel-input').click()">📂 Nhập</button>
     <button class="btn-icon teal" onclick="exportExcel()">📤 Xuất</button>
     <button class="btn-icon accent" onclick="openPointDialog('shop')">➕ Điểm</button>
-    <button class="btn-icon" onclick="openSettings()">⚙️</button>
+    <button class="btn-icon" title="Thống kê" onclick="openStatsDialog()">📊</button>
+    <button class="btn-icon" title="Cài đặt" onclick="openSettings()">⚙️</button>
     <input id="excel-input" type="file" accept=".xlsx,.xls" hidden/>
   </div>
 </header>
@@ -109,9 +110,15 @@
         <input id="pt-name" type="text" enterkeyhint="next" placeholder="Tên cửa hàng / khách sạn" autocomplete="off" oninput="onPointNameInput()"/>
         <div class="suggest-box" id="pt-suggest"></div>
       </div>
-      <div class="field">
-        <label>Tỉnh / Thành</label>
-        <input id="pt-province" type="text" enterkeyhint="done" placeholder="Quảng Nam, Kon Tum..."/>
+      <div class="coord-row">
+        <div class="field">
+          <label>Tỉnh / Thành</label>
+          <input id="pt-province" type="text" enterkeyhint="done" placeholder="Quảng Nam..."/>
+        </div>
+        <div class="field" id="pt-svc-wrap">
+          <label>Thời gian ghé (phút)</label>
+          <input id="pt-svc" type="number" inputmode="numeric" min="0" max="300" placeholder="Mặc định"/>
+        </div>
       </div>
       <div class="coord-row" id="pt-visit-row">
         <div class="field">
@@ -122,6 +129,15 @@
           <label>Ghé gần nhất</label>
           <input id="pt-last-visit" type="date"/>
         </div>
+      </div>
+      <div class="field" id="pt-move-row" style="display:none;">
+        <label>Chuyển nhanh vị trí trong lộ trình</label>
+        <select id="pt-move-pos"></select>
+      </div>
+      <div class="field">
+        <label>Dán nhanh Link Google Maps hoặc cặp tọa độ (lat, lon)</label>
+        <input id="pt-link" type="text" enterkeyhint="done" placeholder="Dán link Google Maps hoặc 15.880, 108.338" oninput="onPasteCoords('pt')"/>
+        <div class="hint-txt" id="pt-link-msg"></div>
       </div>
       <div class="coord-row">
         <div class="field">
@@ -136,7 +152,7 @@
       <button type="button" class="btn-sm green gps-full-btn" id="btn-pt-gps" onclick="fillPointGPS()">📍 Lấy tọa độ GPS hiện tại</button>
       <div class="field" style="margin-bottom:0;">
         <label>Hoặc chạm vào bản đồ bên dưới để chọn vị trí:</label>
-        <div id="add-mini-map" style="height:160px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
+        <div id="add-mini-map" style="height:155px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
       </div>
     </div>
     <div class="dlg-foot">
@@ -169,6 +185,11 @@
           <label>Tên điểm (nhà riêng, điểm nghỉ, điểm hẹn...)</label>
           <input id="de-name" type="text" enterkeyhint="done" placeholder="Ví dụ: Nhà nghỉ Bình Minh / Điểm xuất phát"/>
         </div>
+        <div class="field">
+          <label>Dán nhanh Link Google Maps hoặc cặp tọa độ</label>
+          <input id="de-link" type="text" enterkeyhint="done" placeholder="Dán link Google Maps hoặc 15.880, 108.338" oninput="onPasteCoords('de')"/>
+          <div class="hint-txt" id="de-link-msg"></div>
+        </div>
         <div class="coord-row">
           <div class="field">
             <label>Vĩ độ (lat)</label>
@@ -182,7 +203,7 @@
         <button type="button" class="btn-sm green gps-full-btn" id="btn-de-gps" onclick="fillDayEndGPS()">📍 Lấy tọa độ GPS hiện tại</button>
         <div class="field" style="margin-bottom:0;">
           <label>Hoặc chạm vào bản đồ để chọn vị trí:</label>
-          <div id="de-mini-map" style="height:155px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
+          <div id="de-mini-map" style="height:150px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
           <label class="chk-inline"><input type="checkbox" id="de-save-hotel"/> Lưu thêm điểm này vào DS Khách sạn</label>
         </div>
       </div>
@@ -194,7 +215,7 @@
   </div>
 </div>
 
-<!-- MODAL GHI CHÚ CHECK-IN -->
+<!-- MODAL GHI CHÚ & LỊCH SỬ GHÉ -->
 <div class="modal" id="note-dialog" onclick="if(event.target===this)closeDlg('note-dialog')">
   <div class="modal-box">
     <div class="dlg-head">
@@ -205,9 +226,10 @@
       <div style="font-weight:700;margin-bottom:6px;" id="note-shop-name"></div>
       <div style="font-size:12px;color:var(--muted);margin-bottom:12px;" id="note-shop-time"></div>
       <div class="field" style="margin-bottom:0;">
-        <label>Ghi chú thực tế (đơn hàng, hẹn lại, đóng cửa...)</label>
+        <label>Ghi chú chuyến này (đơn hàng, hẹn lại, đóng cửa...)</label>
         <textarea id="note-text" rows="3" enterkeyhint="done" placeholder="Ví dụ: Đã chốt đơn 5tr, hẹn giao thứ 5..."></textarea>
       </div>
+      <div id="note-history-box"></div>
     </div>
     <div class="dlg-foot">
       <button class="btn-sm red" onclick="uncheckFromNote()">Huỷ Check-in</button>
@@ -236,7 +258,7 @@
 <div class="modal" id="settings-dialog" onclick="if(event.target===this)closeDlg('settings-dialog')">
   <div class="modal-box">
     <div class="dlg-head">
-      <span>⚙️ Cài đặt</span>
+      <span>⚙️ Cài đặt & Sao lưu</span>
       <button type="button" class="dlg-close" onclick="closeDlg('settings-dialog')">✕</button>
     </div>
     <div class="dlg-body">
@@ -253,25 +275,56 @@
           <input id="cfg-max" type="number" inputmode="numeric" min="1" max="20"/>
         </div>
         <div class="field">
+          <label>Phút ghé mặc định</label>
+          <input id="cfg-svc" type="number" inputmode="numeric" min="5" max="180"/>
+        </div>
+      </div>
+      <div class="coord-row">
+        <div class="field">
+          <label>Bắt đầu làm việc</label>
+          <input id="cfg-ws" type="time"/>
+        </div>
+        <div class="field">
+          <label>Kết thúc làm việc</label>
+          <input id="cfg-we" type="time"/>
+        </div>
+      </div>
+      <div class="coord-row">
+        <div class="field">
+          <label>Nghỉ trưa từ</label>
+          <input id="cfg-ls" type="time"/>
+        </div>
+        <div class="field">
+          <label>Đến</label>
+          <input id="cfg-le" type="time"/>
+        </div>
+      </div>
+      <div class="coord-row">
+        <div class="field">
           <label>Ngày bắt đầu đi</label>
           <input id="cfg-start-date" type="date"/>
         </div>
+        <div class="field">
+          <label>Nguồn Excel</label>
+          <select id="cfg-src">
+            <option value="optimize">Tối ưu từ CuaHang</option>
+            <option value="lichtrinh">Đọc sẵn LichTrinh</option>
+          </select>
+        </div>
       </div>
       <div class="field">
-        <label class="chk-inline" style="margin-top:2px;">
+        <label class="chk-inline">
           <input type="checkbox" id="cfg-skip-off"/> Tự động né Chủ nhật & Ngày lễ nghỉ
         </label>
       </div>
-      <div class="field">
-        <label>Nguồn Excel</label>
-        <select id="cfg-src">
-          <option value="optimize">Tối ưu từ CuaHang + KhachSan</option>
-          <option value="lichtrinh">Đọc sẵn sheet LichTrinh</option>
-        </select>
-      </div>
-      <div class="field" style="display:flex;gap:8px;margin-bottom:0;">
+      <div class="field" style="display:flex;gap:8px;">
         <button type="button" class="btn-sm" onclick="openHotelsManager()">🏨 DS Khách sạn (<span id="cfg-hotel-cnt">0</span>)</button>
         <button type="button" class="btn-sm green" onclick="downloadSampleExcel()">📋 File Excel mẫu</button>
+      </div>
+      <div class="field" style="display:flex;gap:8px;margin-bottom:0;">
+        <button type="button" class="btn-sm" onclick="backupJSON()">💾 Sao lưu (.json)</button>
+        <button type="button" class="btn-sm" onclick="document.getElementById('restore-json-input').click()">♻️ Khôi phục (.json)</button>
+        <input id="restore-json-input" type="file" accept=".json,application/json" hidden/>
       </div>
     </div>
     <div class="dlg-foot">
@@ -305,11 +358,31 @@
           </select>
         </div>
       </div>
+      <div class="field">
+        <label class="chk-inline">
+          <input type="checkbox" id="opt-only-due"/> Chỉ lập tuyến cho các điểm Đến / Quá hạn
+        </label>
+      </div>
       <button type="button" class="btn-sm green gps-full-btn" id="btn-run-opt" onclick="runOptimize()">⚡ Phân tích & Gợi ý 3 phương án</button>
       <div id="opt-plans-box"></div>
     </div>
     <div class="dlg-foot">
       <button class="btn-sm" onclick="closeDlg('opt-dialog')">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL THỐNG KÊ NHANH -->
+<div class="modal" id="stats-dialog" onclick="if(event.target===this)closeDlg('stats-dialog')">
+  <div class="modal-box">
+    <div class="dlg-head">
+      <span>📊 Tổng kết & Thống kê</span>
+      <button type="button" class="dlg-close" onclick="closeDlg('stats-dialog')">✕</button>
+    </div>
+    <div class="dlg-body" id="stats-body"></div>
+    <div class="dlg-foot">
+      <button class="btn-sm green" onclick="copyAllNotesReport()">📋 Copy ghi chú</button>
+      <button class="btn-sm" onclick="closeDlg('stats-dialog')">Đóng</button>
     </div>
   </div>
 </div>

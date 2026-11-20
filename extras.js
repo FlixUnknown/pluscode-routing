@@ -140,7 +140,32 @@ function getVisitStatus(shop,todayIso=toLocalIso()){
   return{state:"ok",label:`Còn ${remain} ngày`,rank:1,cls:"ok"};
 }
 
-// ── Thời tiết Open-Meteo (Cache 2 giờ, an toàn khi offline) ──
+// ── Bóc tách tọa độ từ Link Google Maps / chuỗi ─────────────
+function parseMapsLinkOrCoords(raw){
+  const txt=String(raw||"").trim();
+  if(!txt)return null;
+  if(/maps\.app\.goo\.gl|goo\.gl\/maps/i.test(txt))return{shortLink:true};
+
+  const patterns=[
+    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/,
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+    /(?:q|query|ll|destination|center)=(-?\d+(?:\.\d+)?)(?:,|%2C)\s*(-?\d+(?:\.\d+)?)/i,
+    /^\s*(-?\d+(?:[.,]\d+)?)\s*[,;\s]\s*(-?\d+(?:[.,]\d+)?)\s*$/
+  ];
+  for(const re of patterns){
+    const m=txt.match(re);
+    if(m){
+      const lat=parseFloat(m[1].replace(",","."));
+      const lon=parseFloat(m[2].replace(",","."));
+      if(!isNaN(lat)&&!isNaN(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180){
+        return{lat,lon};
+      }
+    }
+  }
+  return null;
+}
+
+// ── Thời tiết Open-Meteo (Cache 2 giờ) ──────────────────────
 const WX_KEY="lt_wx_cache";
 const WX_CODES={
   0:["☀️","Trời quang"],1:["🌤️","Ít mây"],2:["⛅","Có mây"],3:["☁️","Nhiều mây"],
@@ -157,9 +182,7 @@ async function fetchDayWeather(lat,lon,isoDate){
   let cache={};
   try{cache=JSON.parse(localStorage.getItem(WX_KEY)||"{}");}catch{cache={};}
   const hit=cache[gridKey];
-  if(hit && (Date.now()-hit.ts)<7200000 && hit.days?.[isoDate]){
-    return hit.days[isoDate];
-  }
+  if(hit && (Date.now()-hit.ts)<7200000 && hit.days?.[isoDate])return hit.days[isoDate];
   if(!navigator.onLine)return hit?.days?.[isoDate]||null;
   try{
     const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=14&timezone=Asia%2FHo_Chi_Minh`;
@@ -172,17 +195,50 @@ async function fetchDayWeather(lat,lon,isoDate){
     d.time.forEach((t,i)=>{
       const wc=d.weathercode?.[i]??1;
       const meta=WX_CODES[wc]||["🌤️","Có mây"];
-      days[t]={
-        icon:meta[0],text:meta[1],
-        tMin:Math.round(d.temperature_2m_min?.[i]??0),
-        tMax:Math.round(d.temperature_2m_max?.[i]??0),
-        rain:d.precipitation_probability_max?.[i]??0
-      };
+      days[t]={icon:meta[0],text:meta[1],tMin:Math.round(d.temperature_2m_min?.[i]??0),tMax:Math.round(d.temperature_2m_max?.[i]??0),rain:d.precipitation_probability_max?.[i]??0};
     });
     cache[gridKey]={ts:Date.now(),days};
     localStorage.setItem(WX_KEY,JSON.stringify(cache));
     return days[isoDate]||null;
   }catch{
     return hit?.days?.[isoDate]||null;
+  }
+}
+
+// ── OSRM Road Routing (Đường bộ thực tế, Cache 6 giờ) ───────
+const OSRM_KEY="lt_osrm_cache";
+async function fetchOSRMRoute(pts){
+  if(!pts||pts.length<2||pts.length>25)return null;
+  const coordStr=pts.map(p=>`${Number(p.lon).toFixed(5)},${Number(p.lat).toFixed(5)}`).join(";");
+  let cache={};
+  try{cache=JSON.parse(localStorage.getItem(OSRM_KEY)||"{}");}catch{cache={};}
+  const hit=cache[coordStr];
+  if(hit && (Date.now()-hit.ts)<21600000)return hit.data;
+  if(!navigator.onLine)return hit?.data||null;
+
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),6000);
+  try{
+    const url=`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&steps=false`;
+    const res=await fetch(url,{signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!res.ok)return hit?.data||null;
+    const json=await res.json();
+    const rt=json?.routes?.[0];
+    if(!rt)return null;
+    const data={
+      totalKm:rt.distance/1000,
+      totalMin:Math.round(rt.duration/60),
+      legs:(rt.legs||[]).map(l=>({km:l.distance/1000,min:Math.round(l.duration/60)})),
+      polyline:(rt.geometry?.coordinates||[]).map(([lon,lat])=>[lat,lon])
+    };
+    const keys=Object.keys(cache);
+    if(keys.length>20)delete cache[keys[0]];
+    cache[coordStr]={ts:Date.now(),data};
+    localStorage.setItem(OSRM_KEY,JSON.stringify(cache));
+    return data;
+  }catch{
+    clearTimeout(timer);
+    return hit?.data||null;
   }
 }
