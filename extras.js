@@ -165,8 +165,29 @@ function parseMapsLinkOrCoords(raw){
   return null;
 }
 
-// ── Thời tiết Open-Meteo (Cache 2 giờ) ──────────────────────
-const WX_KEY="lt_wx_cache";
+// ── Nominatim Reverse Geocoding (Lấy địa chỉ & tỉnh thực tế) ─
+async function fetchAddressByCoords(lat,lon){
+  if(!navigator.onLine)return null;
+  const ctrl=new AbortController();
+  const t=setTimeout(()=>ctrl.abort(),5000);
+  try{
+    const url=`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&accept-language=vi`;
+    const res=await fetch(url,{signal:ctrl.signal});
+    clearTimeout(t);
+    if(!res.ok)return null;
+    const data=await res.json();
+    const a=data?.address||{};
+    const parts=[a.house_number,a.road,a.suburb||a.village||a.quarter||a.town,a.city_district||a.county||a.district].filter(Boolean);
+    const prov=(a.state||a.city||"").replace(/^Tỉnh\s+|^Thành phố\s+/i,"").trim();
+    return{address:parts.join(", "),province:prov};
+  }catch{
+    clearTimeout(t);
+    return null;
+  }
+}
+
+// ── Thời tiết Open-Meteo theo khung giờ làm việc (fix lỗi mưa 100% đêm) ─
+const WX_KEY="lt_wx_cache_v2";
 const WX_CODES={
   0:["☀️","Trời quang"],1:["🌤️","Ít mây"],2:["⛅","Có mây"],3:["☁️","Nhiều mây"],
   45:["🌫️","Sương mù"],48:["🌫️","Sương mù"],
@@ -176,65 +197,113 @@ const WX_CODES={
   95:["⛈️","Dông bão"],96:["⛈️","Dông sét"],99:["⛈️","Dông mạnh"]
 };
 
-async function fetchDayWeather(lat,lon,isoDate){
+function summarizeWorkWeather(dayRec,wsHour=8,weHour=17){
+  if(!dayRec)return null;
+  const hrs=(dayRec.hours||[]).slice(Math.max(0,wsHour),Math.min(24,weHour+1));
+  if(!hrs.length)return{icon:dayRec.icon,text:dayRec.text,tMin:dayRec.tMin,tMax:dayRec.tMax,rain:0,mm:0};
+  let sumProb=0,totalMm=0,maxWc=0;
+  hrs.forEach(h=>{
+    sumProb+=(h.prob||0);
+    totalMm+=(h.mm||0);
+    if((h.wc||0)>maxWc)maxWc=h.wc||0;
+  });
+  const avgProb=Math.round(sumProb/hrs.length);
+  const displayCode=(totalMm>=0.4)?maxWc:dayRec.dayWc;
+  const meta=WX_CODES[displayCode]||["🌤️","Có mây"];
+  return{
+    icon:meta[0],
+    text:meta[1],
+    tMin:dayRec.tMin,
+    tMax:dayRec.tMax,
+    rain:avgProb,
+    mm:Number(totalMm.toFixed(1))
+  };
+}
+
+async function fetchDayWeather(lat,lon,isoDate,wsHour=8,weHour=17){
   if(lat==null||lon==null||!isoDate)return null;
   const gridKey=`${Number(lat).toFixed(2)},${Number(lon).toFixed(2)}`;
   let cache={};
   try{cache=JSON.parse(localStorage.getItem(WX_KEY)||"{}");}catch{cache={};}
   const hit=cache[gridKey];
-  if(hit && (Date.now()-hit.ts)<7200000 && hit.days?.[isoDate])return hit.days[isoDate];
-  if(!navigator.onLine)return hit?.days?.[isoDate]||null;
+  if(hit && (Date.now()-hit.ts)<7200000 && hit.days?.[isoDate]){
+    return summarizeWorkWeather(hit.days[isoDate],wsHour,weHour);
+  }
+  if(!navigator.onLine)return hit?.days?.[isoDate]?summarizeWorkWeather(hit.days[isoDate],wsHour,weHour):null;
   try{
-    const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=14&timezone=Asia%2FHo_Chi_Minh`;
+    const url=`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&daily=weathercode,temperature_2m_max,temperature_2m_min&hourly=precipitation_probability,precipitation,weathercode&forecast_days=14&timezone=Asia%2FHo_Chi_Minh`;
     const res=await fetch(url,{cache:"no-store"});
-    if(!res.ok)return hit?.days?.[isoDate]||null;
+    if(!res.ok)return hit?.days?.[isoDate]?summarizeWorkWeather(hit.days[isoDate],wsHour,weHour):null;
     const data=await res.json();
-    const d=data?.daily;
+    const d=data?.daily,hr=data?.hourly;
     if(!d?.time?.length)return null;
     const days={};
     d.time.forEach((t,i)=>{
       const wc=d.weathercode?.[i]??1;
       const meta=WX_CODES[wc]||["🌤️","Có mây"];
-      days[t]={icon:meta[0],text:meta[1],tMin:Math.round(d.temperature_2m_min?.[i]??0),tMax:Math.round(d.temperature_2m_max?.[i]??0),rain:d.precipitation_probability_max?.[i]??0};
+      const hours=[];
+      if(hr?.time?.length){
+        for(let h=0;h<24;h++){
+          const idx=i*24+h;
+          hours.push({
+            prob:hr.precipitation_probability?.[idx]??0,
+            mm:hr.precipitation?.[idx]??0,
+            wc:hr.weathercode?.[idx]??wc
+          });
+        }
+      }
+      days[t]={
+        dayWc:wc,icon:meta[0],text:meta[1],
+        tMin:Math.round(d.temperature_2m_min?.[i]??0),
+        tMax:Math.round(d.temperature_2m_max?.[i]??0),
+        hours
+      };
     });
     cache[gridKey]={ts:Date.now(),days};
     localStorage.setItem(WX_KEY,JSON.stringify(cache));
-    return days[isoDate]||null;
+    return summarizeWorkWeather(days[isoDate],wsHour,weHour);
   }catch{
-    return hit?.days?.[isoDate]||null;
+    return hit?.days?.[isoDate]?summarizeWorkWeather(hit.days[isoDate],wsHour,weHour):null;
   }
 }
 
-// ── OSRM Road Routing (Đường bộ thực tế, Cache 6 giờ) ───────
-const OSRM_KEY="lt_osrm_cache";
-async function fetchOSRMRoute(pts){
+// ── OSRM Road Routing + Tuyến thay thế (alternatives=true) ───
+const OSRM_KEY="lt_osrm_cache_v2";
+async function fetchOSRMRoute(pts,withAlt=false){
   if(!pts||pts.length<2||pts.length>25)return null;
   const coordStr=pts.map(p=>`${Number(p.lon).toFixed(5)},${Number(p.lat).toFixed(5)}`).join(";");
+  const cKey=`${coordStr}_${withAlt?"alt":"1"}`;
   let cache={};
   try{cache=JSON.parse(localStorage.getItem(OSRM_KEY)||"{}");}catch{cache={};}
-  const hit=cache[coordStr];
+  const hit=cache[cKey];
   if(hit && (Date.now()-hit.ts)<21600000)return hit.data;
   if(!navigator.onLine)return hit?.data||null;
 
   const ctrl=new AbortController();
   const timer=setTimeout(()=>ctrl.abort(),6000);
   try{
-    const url=`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&steps=false`;
+    const url=`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson&steps=false${withAlt?"&alternatives=true":""}`;
     const res=await fetch(url,{signal:ctrl.signal});
     clearTimeout(timer);
     if(!res.ok)return hit?.data||null;
     const json=await res.json();
     const rt=json?.routes?.[0];
     if(!rt)return null;
+    const rtAlt=json?.routes?.[1];
     const data={
       totalKm:rt.distance/1000,
       totalMin:Math.round(rt.duration/60),
       legs:(rt.legs||[]).map(l=>({km:l.distance/1000,min:Math.round(l.duration/60)})),
-      polyline:(rt.geometry?.coordinates||[]).map(([lon,lat])=>[lat,lon])
+      polyline:(rt.geometry?.coordinates||[]).map(([lon,lat])=>[lat,lon]),
+      alt:rtAlt?{
+        totalKm:rtAlt.distance/1000,
+        totalMin:Math.round(rtAlt.duration/60),
+        polyline:(rtAlt.geometry?.coordinates||[]).map(([lon,lat])=>[lat,lon])
+      }:null
     };
     const keys=Object.keys(cache);
     if(keys.length>20)delete cache[keys[0]];
-    cache[coordStr]={ts:Date.now(),data};
+    cache[cKey]={ts:Date.now(),data};
     localStorage.setItem(OSRM_KEY,JSON.stringify(cache));
     return data;
   }catch{
