@@ -1,10 +1,11 @@
-const APP_CACHE = "lt-app-v2";
+const APP_CACHE = "lt-app-v3";
 const TILE_CACHE = "lt-tiles-v1";
 
 const APP_SHELL = [
   "./",
   "./index.html",
   "./style.css",
+  "./extras.js",
   "./app.js",
   "./manifest.json"
 ];

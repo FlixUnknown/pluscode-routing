@@ -36,6 +36,7 @@
   <div id="map-wrap">
     <div id="map"></div>
     <button class="map-gps-btn map-expand-btn mob-only" id="btn-map-exp" title="Phóng to / Thu nhỏ" onclick="toggleMapExpand()">⤢</button>
+    <button class="map-gps-btn map-live-btn" id="btn-live-gps" title="Theo dõi vị trí liên tục (Live GPS)" onclick="toggleLiveGPS()">🛰️</button>
     <button class="map-gps-btn" title="Vị trí GPS hiện tại" onclick="locateMeOnMap()">📍</button>
   </div>
 
@@ -55,6 +56,7 @@
     </div>
 
     <div class="day-tabs" id="day-tabs"></div>
+    <div class="day-meta-bar" id="day-meta-bar" style="display:none;"></div>
 
     <div class="search-bar">
       <div class="search-wrap">
@@ -65,6 +67,7 @@
         <option value="all">Tất cả</option>
         <option value="todo">⬜ Chưa ghé</option>
         <option value="done">✅ Đã ghé</option>
+        <option value="due">⏰ Đến/Quá hạn</option>
       </select>
       <div class="prog-box">
         <span class="prog-txt" id="prog-txt">✅ 0/0</span>
@@ -75,8 +78,10 @@
     <div class="act-strip">
       <button class="btn btn-nav" onclick="navigateNext()">🧭 Điểm tiếp theo</button>
       <button class="btn btn-route" onclick="navigateDay()">🗺️ Tuyến ngày</button>
-      <button class="btn btn-opt" onclick="openOptimize()">⚡ Tối ưu</button>
+      <button class="btn btn-opt" id="btn-opt-main" onclick="openOptimize()">⚡ Tối ưu<span class="opt-dot" id="opt-dot"></span></button>
     </div>
+
+    <div class="near-banner" id="near-banner"></div>
 
     <div class="list" id="schedule-list"></div>
   </div>
@@ -108,6 +113,16 @@
         <label>Tỉnh / Thành</label>
         <input id="pt-province" type="text" enterkeyhint="done" placeholder="Quảng Nam, Kon Tum..."/>
       </div>
+      <div class="coord-row" id="pt-visit-row">
+        <div class="field">
+          <label>Tần suất ghé (ngày)</label>
+          <input id="pt-freq" type="number" inputmode="numeric" min="0" max="365" placeholder="VD: 7, 14, 30"/>
+        </div>
+        <div class="field">
+          <label>Ghé gần nhất</label>
+          <input id="pt-last-visit" type="date"/>
+        </div>
+      </div>
       <div class="coord-row">
         <div class="field">
           <label>Vĩ độ (lat)</label>
@@ -121,7 +136,7 @@
       <button type="button" class="btn-sm green gps-full-btn" id="btn-pt-gps" onclick="fillPointGPS()">📍 Lấy tọa độ GPS hiện tại</button>
       <div class="field" style="margin-bottom:0;">
         <label>Hoặc chạm vào bản đồ bên dưới để chọn vị trí:</label>
-        <div id="add-mini-map" style="height:165px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
+        <div id="add-mini-map" style="height:160px;border-radius:10px;overflow:hidden;border:1px solid var(--bdr);"></div>
       </div>
     </div>
     <div class="dlg-foot">
@@ -232,9 +247,20 @@
           <option value="oto">🚗 Ô tô (40 km/h · 6 điểm/ngày)</option>
         </select>
       </div>
+      <div class="coord-row">
+        <div class="field">
+          <label>Số CH tối đa / ngày</label>
+          <input id="cfg-max" type="number" inputmode="numeric" min="1" max="20"/>
+        </div>
+        <div class="field">
+          <label>Ngày bắt đầu đi</label>
+          <input id="cfg-start-date" type="date"/>
+        </div>
+      </div>
       <div class="field">
-        <label>Số cửa hàng tối đa / ngày</label>
-        <input id="cfg-max" type="number" inputmode="numeric" min="1" max="20"/>
+        <label class="chk-inline" style="margin-top:2px;">
+          <input type="checkbox" id="cfg-skip-off"/> Tự động né Chủ nhật & Ngày lễ nghỉ
+        </label>
       </div>
       <div class="field">
         <label>Nguồn Excel</label>
@@ -256,42 +282,39 @@
   </div>
 </div>
 
-<!-- MODAL TỐI ƯU -->
+<!-- MODAL TỐI ƯU & SO SÁNH PHƯƠNG ÁN -->
 <div class="modal" id="opt-dialog" onclick="if(event.target===this)closeDlg('opt-dialog')">
   <div class="modal-box">
     <div class="dlg-head">
-      <span>⚡ Tối ưu Tuyến Đường</span>
+      <span>⚡ So sánh & Tối ưu Tuyến</span>
       <button type="button" class="dlg-close" onclick="closeDlg('opt-dialog')">✕</button>
     </div>
     <div class="dlg-body">
-      <div class="opt-info" id="opt-info">Nhấn <strong>Chạy tối ưu</strong> để phân tích, sắp xếp và lưu lại tuyến đường tốt nhất.</div>
-      <div class="field">
-        <label>Điểm xuất phát</label>
-        <select id="opt-start">
-          <option value="">-- Mặc định (KS ngày trước / điểm đầu) --</option>
-        </select>
+      <div class="opt-info" id="opt-info">Chọn điểm xuất phát & phạm vi rồi bấm <strong>Phân tích phương án</strong> để so sánh.</div>
+      <div class="coord-row">
+        <div class="field">
+          <label>Điểm xuất phát</label>
+          <select id="opt-start">
+            <option value="">-- Mặc định --</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>Phạm vi ngày</label>
+          <select id="opt-day">
+            <option value="0">Toàn bộ</option>
+          </select>
+        </div>
       </div>
-      <div class="field">
-        <label>Chỉ tối ưu ngày</label>
-        <select id="opt-day">
-          <option value="0">Toàn bộ lịch trình</option>
-        </select>
-      </div>
-      <div class="field" style="margin-bottom:0;">
-        <label>Thuật toán</label>
-        <select id="opt-algo">
-          <option value="province">Theo tỉnh → NN + 2-opt (khuyến nghị)</option>
-          <option value="nn2opt">Nearest Neighbor + 2-opt (xuyên tỉnh)</option>
-        </select>
-      </div>
+      <button type="button" class="btn-sm green gps-full-btn" id="btn-run-opt" onclick="runOptimize()">⚡ Phân tích & Gợi ý 3 phương án</button>
+      <div id="opt-plans-box"></div>
     </div>
     <div class="dlg-foot">
       <button class="btn-sm" onclick="closeDlg('opt-dialog')">Đóng</button>
-      <button class="btn-sm green" id="btn-run-opt" onclick="runOptimize()">⚡ Chạy tối ưu</button>
     </div>
   </div>
 </div>
 
+<script src="extras.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
