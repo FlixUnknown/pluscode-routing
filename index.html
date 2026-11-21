@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <link rel="stylesheet" href="style.css"/>
+  <link rel="stylesheet" href="style_patch.css"/>
 </head>
 <body>
 <header>
@@ -42,6 +43,7 @@
   <div id="side-panel">
     <div class="day-tabs" id="day-tabs"></div>
     <div class="day-meta-bar" id="day-meta-bar"></div>
+  <div class="prov-filter-bar" id="prov-filter-bar" style="display:none;"></div>
 
     <div class="search-bar">
       <div class="search-wrap">
@@ -425,5 +427,9 @@
 
 <script src="extras.js"></script>
 <script src="app.js"></script>
+
+<nav class="bottom-nav" id="bottom-nav">
+  <!-- Rendered by renderBottomNav() in app_patch.js -->
+</nav>
 </body>
 </html>

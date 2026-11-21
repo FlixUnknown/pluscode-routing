@@ -1,3 +1,252 @@
+/* ══ BOTTOM NAVIGATION BAR ══════════════════════════════════ */
+.bottom-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0; right: 0;
+  height: calc(56px + env(safe-area-inset-bottom));
+  padding-bottom: env(safe-area-inset-bottom);
+  background: #fff;
+  border-top: 1px solid var(--bdr);
+  display: flex;
+  align-items: stretch;
+  z-index: 900;
+  box-shadow: 0 -2px 12px rgba(0,0,0,.08);
+}
+.bnav-item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 6px 4px;
+  text-decoration: none;
+  position: relative;
+  transition: color .15s;
+}
+.bnav-item .bnav-icon { font-size: 20px; line-height: 1; }
+.bnav-item.active { color: var(--p); }
+.bnav-item.active::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 20%; right: 20%;
+  height: 3px;
+  background: var(--p);
+  border-radius: 0 0 4px 4px;
+}
+.bnav-item.opt-btn { color: var(--warn); }
+.bnav-item.opt-btn.active { color: var(--warn); }
+.bnav-item.opt-btn.active::before { background: var(--warn); }
+/* Badge tối ưu cần */
+.bnav-dot {
+  position: absolute;
+  top: 5px;
+  right: calc(50% - 18px);
+  width: 8px; height: 8px;
+  background: var(--red);
+  border-radius: 50%;
+  border: 2px solid #fff;
+  display: none;
+}
+.bnav-dot.show { display: block; }
+
+/* Đẩy list lên trên bottom nav */
+.list { padding-bottom: calc(70px + env(safe-area-inset-bottom)); }
+#side-panel { padding-bottom: 0; }
+
+/* ══ HEADER GỌN HƠN (ẩn các nút đã chuyển xuống bottom nav) ══ */
+.hdr-btns .btn-icon.moved { display: none; }
+
+/* ══ PROVINCE FILTER CHIPS ══════════════════════════════════ */
+.prov-filter-bar {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding: 6px 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--bdr);
+  flex-shrink: 0;
+  -webkit-overflow-scrolling: touch;
+}
+.prov-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--bdr);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all .15s;
+  flex-shrink: 0;
+}
+.prov-chip.active {
+  background: var(--p);
+  color: #fff;
+  border-color: var(--p);
+}
+.prov-chip .chip-cnt {
+  background: rgba(255,255,255,.25);
+  color: inherit;
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 999px;
+}
+.prov-chip:not(.active) .chip-cnt {
+  background: var(--bg);
+  color: var(--muted);
+}
+
+/* ══ SHOP CARD — Thêm weather + visit status badge ══════════ */
+.card-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.wx-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #f0f9ff;
+  color: #0369a1;
+  border: 1px solid #bae6fd;
+}
+.wx-badge.rain { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
+.freq-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.freq-badge.ok  { background: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; }
+.freq-badge.due { background: #fefce8; color: #a16207; border: 1px solid #fde68a; }
+.freq-badge.overdue { background: #fef2f2; color: #b91c1c; border: 1px solid #fca5a5; }
+
+/* ══ OPT DIALOG — Before vs After ══════════════════════════ */
+.opt-compare {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  align-items: center;
+  margin: 12px 0;
+}
+.opt-box {
+  background: #f8fafc;
+  border: 1.5px solid var(--bdr);
+  border-radius: 10px;
+  padding: 10px;
+  text-align: center;
+}
+.opt-box.after {
+  background: #f0fdf4;
+  border-color: #86efac;
+}
+.opt-box .ob-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.opt-box .ob-km {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--txt);
+  line-height: 1.1;
+}
+.opt-box.after .ob-km { color: var(--acc); }
+.opt-box .ob-sub {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+.opt-arrow {
+  font-size: 20px;
+  color: var(--acc);
+  font-weight: 700;
+  text-align: center;
+}
+.opt-saving {
+  background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+  border: 1.5px solid #86efac;
+  border-radius: 10px;
+  padding: 10px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #15803d;
+  margin-bottom: 12px;
+}
+.opt-saving .save-pct {
+  font-size: 22px;
+  font-weight: 800;
+  color: var(--acc);
+}
+
+/* ══ AREA SELECTOR trong opt-dialog ════════════════════════ */
+.area-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.area-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1.5px solid var(--bdr);
+  background: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+.area-chip input[type=checkbox] { width: 13px; height: 13px; accent-color: var(--p); }
+.area-chip.checked { border-color: var(--p); background: #eff6ff; color: var(--p); }
+
+/* ══ REGION SECTION trong schedule list ════════════════════ */
+.region-divider {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0 4px;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+.region-divider::before, .region-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--bdr);
+}
+
+/* ══ NEAR BANNER cao hơn bottom nav ════════════════════════ */
+#near-banner {
+  bottom: calc(60px + env(safe-area-inset-bottom));
+}
 :root{
   --p:#0f4c81;--pl:#1b6ca8;--acc:#00a86b;--warn:#e67e22;--red:#dc2626;
   --bg:#f3f6fa;--card:#fff;--txt:#1e293b;--muted:#64748b;--bdr:#e2e8f0;
