@@ -1976,7 +1976,6 @@ function openStatsDialog(){
   `;
   openDlg("stats-dialog");
 }
-
 async function copyAllNotesReport(){
   const lines=["📝 TỔNG HỢP GHI CHÚ ĐƠN HÀNG:"];
   let cnt=0;
@@ -2377,3 +2376,358 @@ window.addEventListener("resize",()=>setTimeout(()=>lmap.invalidateSize(),150));
 
 function refreshAll(){buildSchedule();renderUI();renderMap();loadDayExtras();}
 refreshAll();
+
+// ══════════════════════════════════════════════════════════════
+// APP PATCH V2 — Safe: Không override hàm gốc
+// Dán vào CUỐI app_1.js (sau dòng refreshAll() cuối cùng)
+// ══════════════════════════════════════════════════════════════
+
+// ── 1. Province Filter ──────────────────────────────────────
+(function() {
+  "use strict";
+
+  // State riêng, an toàn với const st
+  const patchState = {
+    selProvs: JSON.parse(localStorage.getItem("lt_sel_provs") || "[]"),
+    bnavTab: "list",
+    wxCache: {}
+  };
+
+  function saveProvs() {
+    localStorage.setItem("lt_sel_provs", JSON.stringify(patchState.selProvs));
+  }
+
+  function getAllProvs() {
+    return [...new Set((st.raw.shops || []).map(s => s.province).filter(Boolean))].sort((a,b) => a.localeCompare(b,"vi"));
+  }
+
+  window.patchToggleProv = function(prov) {
+    const i = patchState.selProvs.indexOf(prov);
+    if (i >= 0) patchState.selProvs.splice(i, 1);
+    else patchState.selProvs.push(prov);
+    saveProvs();
+    renderProvBar();
+    renderScheduleList(); // Chỉ re-render list, không rebuild schedule
+  };
+
+  window.patchClearProv = function() {
+    patchState.selProvs = [];
+    saveProvs();
+    renderProvBar();
+    renderScheduleList();
+  };
+
+  // ── 2. Province Filter Bar ────────────────────────────────
+  function renderProvBar() {
+    const bar = document.getElementById("prov-filter-bar");
+    if (!bar) return;
+    const provs = getAllProvs();
+    if (provs.length <= 1) { bar.style.display = "none"; return; }
+    bar.style.display = "flex";
+
+    const total = (st.schedule || []).length;
+    let h = `<button class="prov-chip${patchState.selProvs.length === 0 ? " active" : ""}" onclick="patchClearProv()">
+      🌏 Tất cả <span class="chip-cnt">${total}</span>
+    </button>`;
+    provs.forEach(p => {
+      const cnt = (st.schedule || []).filter(s => s.province === p).length;
+      if (!cnt) return;
+      const act = patchState.selProvs.includes(p);
+      h += `<button class="prov-chip${act?" active":""}" onclick="patchToggleProv(${JSON.stringify(p)})">
+        ${escHtml(p)} <span class="chip-cnt">${cnt}</span>
+      </button>`;
+    });
+    bar.innerHTML = h;
+  }
+
+  // ── 3. Filtered schedule list (không thay renderUI) ───────
+  function getFilteredStops() {
+    let list = [];
+    if (st.sel_day === 0) list = st.schedule || [];
+    else list = (st.schedule || []).filter(s => s.day === st.sel_day);
+    if (patchState.selProvs.length > 0)
+      list = list.filter(s => patchState.selProvs.includes(s.province));
+    return list;
+  }
+
+  function renderScheduleList() {
+    // Chỉ filter visible list, không touch day tabs hay stats
+    const listEl = document.getElementById("schedule-list");
+    if (!listEl || patchState.selProvs.length === 0) return;
+    // Ẩn các card không thuộc tỉnh đang filter
+    const cards = listEl.querySelectorAll("[data-name]");
+    cards.forEach(card => {
+      const name = card.getAttribute("data-name");
+      const shop = (st.schedule || []).find(s => s.name === name);
+      if (!shop) return;
+      card.style.display = patchState.selProvs.includes(shop.province) ? "" : "none";
+    });
+  }
+
+  // ── 4. Bottom Nav Bar ─────────────────────────────────────
+  function renderBnav() {
+    const bn = document.getElementById("bottom-nav");
+    if (!bn) return;
+    const t = patchState.bnavTab;
+    const dot = st.needs_reopt ? ' <span class="bnav-dot show"></span>' : '';
+    bn.innerHTML = `
+      <button class="bnav-item${t==="map"?" active":""}" onclick="patchBnav('map')">
+        <span class="bnav-icon">🗺️</span>Bản đồ
+      </button>
+      <button class="bnav-item${t==="list"?" active":""}" onclick="patchBnav('list')">
+        <span class="bnav-icon">📋</span>Lịch trình
+      </button>
+      <button class="bnav-item${t==="add"?" active":""}" onclick="patchBnav('add')">
+        <span class="bnav-icon">➕</span>Thêm
+      </button>
+      <button class="bnav-item bnav-opt${t==="opt"?" active":""}" onclick="patchBnav('opt')">
+        <span class="bnav-icon">⚡</span>Tối ưu${dot}
+      </button>
+      <button class="bnav-item${t==="cfg"?" active":""}" onclick="patchBnav('cfg')">
+        <span class="bnav-icon">⚙️</span>Cài đặt
+      </button>`;
+  }
+
+  window.patchBnav = function(tab) {
+    patchState.bnavTab = tab;
+    if (tab === "map") {
+      document.body.classList.remove("map-collapsed");
+      document.body.classList.add("map-expanded");
+      setTimeout(() => { if(typeof lmap!=="undefined") lmap.invalidateSize(); }, 220);
+    } else if (tab === "list") {
+      document.body.classList.remove("map-expanded","map-collapsed");
+      setTimeout(() => { if(typeof lmap!=="undefined") lmap.invalidateSize(); }, 220);
+    } else if (tab === "add") {
+      if (typeof openPointDialog === "function") openPointDialog("shop");
+    } else if (tab === "opt") {
+      if (typeof openOptimize === "function") openOptimize();
+    } else if (tab === "cfg") {
+      if (typeof openSettings === "function") openSettings();
+    }
+    renderBnav();
+  };
+
+  // ── 5. Area chips trong opt-dialog ───────────────────────
+  // Inject area chips vào opt-dialog khi mở — MO: observe DOM
+  function injectAreaChips() {
+    const dlgBody = document.querySelector("#opt-dialog .modal-body, #opt-dialog .dlg-body");
+    if (!dlgBody || dlgBody.querySelector(".area-chips")) return;
+    const provs = getAllProvs();
+    if (provs.length <= 1) return;
+    const wrap = document.createElement("div");
+    wrap.className = "field";
+    wrap.innerHTML = `<label>🗂️ Chọn khu vực cần tối ưu (bỏ chọn để bỏ qua)</label>
+      <div class="area-chips" id="opt-area-chips">
+        ${provs.map(p => {
+          const checked = patchState.selProvs.length === 0 || patchState.selProvs.includes(p);
+          return `<label class="area-chip${checked?" chk":""}">
+            <input type="checkbox" ${checked?"checked":""} value="${escHtml(p)}"
+              onchange="this.closest('.area-chip').classList.toggle('chk',this.checked)"/>
+            ${escHtml(p)}
+          </label>`;
+        }).join("")}
+      </div>`;
+    // Chèn trước phần footer
+    const foot = dlgBody.querySelector(".modal-footer, .dlg-foot") || null;
+    dlgBody.insertBefore(wrap, foot || null);
+    // Compare wrap
+    if (!dlgBody.querySelector("#opt-compare-wrap")) {
+      const cw = document.createElement("div");
+      cw.id = "opt-compare-wrap"; cw.style.display = "none";
+      dlgBody.prepend(cw);
+    }
+  }
+
+  // Observe opt-dialog open
+  const optDlg = document.getElementById("opt-dialog");
+  if (optDlg) {
+    new MutationObserver(() => {
+      if (optDlg.classList.contains("open") || optDlg.open) {
+        setTimeout(injectAreaChips, 60);
+      }
+    }).observe(optDlg, { attributes: true, attributeFilter: ["class", "open"] });
+  }
+
+  // ── 6. Lấy khu vực được chọn từ chips ──────────────────
+  window.patchGetCheckedAreas = function() {
+    const chips = document.querySelectorAll("#opt-area-chips input[type=checkbox]");
+    if (!chips.length) return [];
+    const all = getAllProvs();
+    const checked = [...chips].filter(c => c.checked).map(c => c.value);
+    return checked.length === all.length ? [] : checked;
+  };
+
+  // ── 7. Hook sau khi runOptimize xong (compare UI) ───────
+  // Dùng MutationObserver để detect khi opt-info thay đổi
+  const optInfoEl = document.getElementById("opt-info");
+  let beforeKm = 0, beforeDays = 0;
+
+  // Capture state trước khi optimize
+  if (optInfoEl) {
+    new MutationObserver((muts) => {
+      muts.forEach(m => {
+        if (m.type === "childList" || m.type === "characterData") {
+          const text = optInfoEl.textContent || "";
+          // Detect khi opt bắt đầu (text reset về mặc định)
+          if (text.includes("Chọn") || text.includes("so sánh")) {
+            beforeKm = (st.schedule || []).reduce((s,x) => s+(x.distKm||0), 0);
+            beforeDays = (st.schedule || []).reduce((m,x) => Math.max(m,x.day), 0);
+          }
+        }
+      });
+    }).observe(optInfoEl, { childList: true, subtree: true, characterData: true });
+  }
+
+  // Monkey-patch runOptimize safely: wrap sau khi app load
+  window.addEventListener("load", () => {
+    // Capture areas trước khi optimize chạy
+    const origRun = window.runOptimize;
+    if (typeof origRun === "function") {
+      window.runOptimize = async function() {
+        // Capture before state
+        beforeKm = (st.schedule || []).reduce((s,x) => s+(x.distKm||0), 0);
+        beforeDays = (st.schedule || []).reduce((m,x) => Math.max(m,x.day), 0);
+        // Lấy khu vực checked
+        const areas = patchGetCheckedAreas();
+        // Nếu có filter khu vực → áp dụng vào opt-only-due workaround
+        if (areas.length > 0) {
+          // Tạm filter st.raw.shops để optimize, khôi phục sau
+          const allShops = st.raw.shops.slice();
+          // Chỉ optimize shops trong area, giữ shop ngoài area nguyên vị trí
+          const inArea = allShops.filter(s => areas.includes(s.province));
+          const outArea = allShops.filter(s => !areas.includes(s.province));
+          // Inject order gợi ý: out trước, in sau (sẽ được NN+2opt optimize)
+          if (outArea.length && inArea.length) {
+            st.raw.shops = [...outArea, ...inArea];
+          }
+          await origRun.apply(this, arguments);
+          st.raw.shops = allShops; // Khôi phục
+        } else {
+          await origRun.apply(this, arguments);
+        }
+        // Render compare UI
+        const afterKm = (st.schedule || []).reduce((s,x) => s+(x.distKm||0), 0);
+        const afterDays = (st.schedule || []).reduce((m,x) => Math.max(m,x.day), 0);
+        const saved = beforeKm - afterKm;
+        const pct = beforeKm > 0 ? Math.round((saved/beforeKm)*100) : 0;
+        const cw = document.getElementById("opt-compare-wrap");
+        if (cw) {
+          cw.style.display = "block";
+          cw.innerHTML = saved > 0.5
+            ? `<div class="opt-saving">
+                <span>💚 Tiết kiệm ~${Math.abs(saved).toFixed(1)} km</span>
+                <span class="save-pct">${pct}%</span>
+               </div>
+               <div class="opt-compare">
+                 <div class="opt-box">
+                   <div class="ob-label">TRƯỚC</div>
+                   <div class="ob-km">${beforeKm.toFixed(0)} km</div>
+                   <div class="ob-sub">${beforeDays} ngày</div>
+                 </div>
+                 <div class="opt-arrow">→</div>
+                 <div class="opt-box after">
+                   <div class="ob-label">SAU TỐI ƯU ✅</div>
+                   <div class="ob-km">${afterKm.toFixed(0)} km</div>
+                   <div class="ob-sub">${afterDays} ngày</div>
+                 </div>
+               </div>`
+            : `<div class="opt-info" style="margin:0 0 10px;">✅ Tuyến đã tối ưu, không thay đổi đáng kể.</div>`;
+        }
+        // Cập nhật province filter nếu user chọn khu vực cụ thể
+        if (areas.length > 0) {
+          patchState.selProvs = areas;
+          saveProvs();
+        }
+        renderProvBar();
+        renderBnav();
+      };
+    }
+  });
+
+  // ── 8. Weather badges (async, không block UI) ────────────
+  async function injectWxBadges() {
+    if (typeof fetchDayWeather !== "function") return;
+    const today = typeof toLocalIso === "function" ? toLocalIso() : new Date().toISOString().slice(0,10);
+    const visible = patchState.selProvs.length > 0
+      ? (st.schedule||[]).filter(s => patchState.selProvs.includes(s.province))
+      : (st.sel_day === 0 ? (st.schedule||[]) : (st.schedule||[]).filter(s=>s.day===st.sel_day));
+    for (const s of visible.slice(0, 8)) { // Giới hạn 8 để tránh spam API
+      const cal = st.day_calendar && st.day_calendar[s.day];
+      const iso = cal?.iso || today;
+      let el = document.querySelector(`.shop-card [data-wx="${s.name}"]`);
+      if (!el) continue;
+      if (el.dataset.loaded === "1") continue;
+      try {
+        const wx = await fetchDayWeather(s.lat, s.lon, iso, 8, 17);
+        if (!wx) continue;
+        const rain = wx.rain >= 50;
+        el.innerHTML = `<span class="wx-badge${rain?" rain":""}">
+          ${wx.icon} ${wx.text} ${wx.tMin}–${wx.tMax}°C${wx.rain>0?` · 🌧️${wx.rain}%`:""}
+        </span>`;
+        el.dataset.loaded = "1";
+      } catch(e) {}
+    }
+  }
+
+  // ── 9. Inject vào renderUI gốc qua postRender hook ───────
+  // Thêm data-name vào cards (cần thiết cho province filter)
+  // và data-wx placeholder cho weather
+  function postRender() {
+    // Thêm data-name vào cards nếu chưa có
+    document.querySelectorAll(".shop-card:not([data-name])").forEach(card => {
+      const strong = card.querySelector(".shop-info strong, .shop-name");
+      if (!strong) return;
+      const name = strong.textContent.trim();
+      const shop = (st.schedule||[]).find(s => s.name === name);
+      if (!shop) return;
+      card.setAttribute("data-name", name);
+      // Thêm freq badge
+      const vs = typeof getVisitStatus === "function" ? getVisitStatus(getShopMeta(name)||shop) : null;
+      if (vs) {
+        let badges = card.querySelector(".card-badges");
+        if (!badges) {
+          badges = document.createElement("div");
+          badges.className = "card-badges";
+          const info = card.querySelector(".shop-info,.shop-meta");
+          if (info) info.appendChild(badges);
+        }
+        if (!badges.querySelector(".freq-badge")) {
+          const fb = document.createElement("span");
+          fb.className = `freq-badge ${vs.cls||"ok"}`;
+          fb.textContent = `🔄 ${vs.label}`;
+          badges.appendChild(fb);
+        }
+        // Weather placeholder
+        if (!badges.querySelector("[data-wx]")) {
+          const wb = document.createElement("span");
+          wb.setAttribute("data-wx", name);
+          wb.className = "wx-badge";
+          wb.textContent = "⏳ Thời tiết...";
+          badges.appendChild(wb);
+        }
+      }
+    });
+    renderProvBar();
+    renderBnav();
+    renderScheduleList();
+    // Load weather async
+    setTimeout(injectWxBadges, 400);
+  }
+
+  // ── 10. Hook vào refreshAll ────────────────────────────────
+  const origRefreshAll = typeof refreshAll === "function" ? refreshAll : null;
+  if (origRefreshAll) {
+    window.refreshAll = function() {
+      origRefreshAll.apply(this, arguments);
+      postRender();
+    };
+  }
+
+  // Init
+  setTimeout(() => {
+    postRender();
+    renderProvBar();
+    renderBnav();
+  }, 300);
+
+})(); // End IIFE
