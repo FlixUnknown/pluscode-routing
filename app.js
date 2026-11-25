@@ -1,4 +1,3 @@
-javascript
 // ── Service Worker Offline ─────────────────────────────────
 if("serviceWorker" in navigator && location.protocol.startsWith("http")){
   window.addEventListener("load",()=>{
