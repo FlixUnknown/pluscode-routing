@@ -5,9 +5,12 @@ if("serviceWorker" in navigator && location.protocol.startsWith("http")){
   });
 }
 
-// ── Hằng số & Helpers ──────────────────────────────────────
+// ── Hằng số & Helpers (Xe máy max 90km/ngày, Ô tô max 165km/ngày) ──
 const EAR=6371,ROAD=1.35;
-const MODES={xemay:{label:"Xe máy",max:4,spd:35},oto:{label:"Ô tô",max:6,spd:40}};
+const MODES={
+  xemay:{label:"Xe máy",max:4,spd:35,maxKm:90},
+  oto:{label:"Ô tô",max:6,spd:40,maxKm:165}
+};
 const escHtml=s=>String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const normVN=s=>String(s||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/đ/g,"d").replace(/Đ/g,"D").toLowerCase().trim();
 const parseCoord=v=>{if(v===null||v===undefined||v==="")return NaN;if(typeof v==="number")return v;return parseFloat(String(v).replace(",",".").trim());};
@@ -64,12 +67,13 @@ const st={
   day_start_times:ldj("lt_day_starts",{}),
   postponed_day:ldj("lt_postponed",{}),
   trip_end_point:ldj("lt_trip_end",null),
-  schedule:[],hotels_by_day:{},day_calendar:{},weather_by_day:{},osrm_by_day:{},
-  sel_day:1,search:"",status_filter:"all",edit_mode:false,
+  schedule:[],hotels_by_day:{},day_calendar:{},weather_by_day:{},osrm_by_day:{},day_km_over:{},
+  sel_day:1,sel_provinces:ldj("lt_sel_provs",[]),search:"",status_filter:"all",edit_mode:false,bnav_tab:"list",
   checkins:ldj("lt_ci",{}),
   visit_history:ldj("lt_history",{}),
   mode:MODES[initMode]?initMode:"xemay",
   max_shops:Number(localStorage.getItem("lt_max"))||MODES[initMode]?.max||4,
+  max_km:Number(localStorage.getItem("lt_max_km"))||MODES[initMode]?.maxKm||90,
   excel_src:localStorage.getItem("lt_src")||"optimize",
   start_date:localStorage.getItem("lt_start_date")||toLocalIso(),
   skip_off_days:localStorage.getItem("lt_skip_off")==="1",
@@ -104,6 +108,17 @@ function getShopMeta(name){
   return st.raw.shops.find(s=>s.name===name)||null;
 }
 
+function getAllProvinces(){
+  return [...new Set((st.raw.shops.length?st.raw.shops:st.schedule).map(s=>s.province).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"vi"));
+}
+
+function hotelMatchesFilter(h,vis){
+  if(!h)return false;
+  if(st.sel_provinces.length===0)return true;
+  if(h.type==="last_shop")return Boolean(vis.length&&st.sel_provinces.includes(vis[vis.length-1].province));
+  return Boolean(h.province&&st.sel_provinces.includes(h.province));
+}
+
 // ── Leaflet ─────────────────────────────────────────────────
 const esriStreet=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{attribution:"© Esri",maxZoom:19});
 const esriTopo=L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",{attribution:"© Esri",maxZoom:19});
@@ -125,15 +140,16 @@ function renderMap(){
   const stops=visibleStops(); if(!stops.length)return;
   const pts=[];
   const perDayMode=(!st.search&&st.sel_day!==0);
+  const fullDayNoFilter=(perDayMode&&st.status_filter==="all"&&st.sel_provinces.length===0);
 
-  if(!st.search&&st.status_filter==="all"&&st.sel_day===1&&st.day_end_points[0]?.lat!=null){
+  if(fullDayNoFilter&&st.sel_day===1&&st.day_end_points[0]?.lat!=null){
     const s0=st.day_end_points[0];
     const sm=L.marker([s0.lat,s0.lon],{icon:mkIcon("S","#2563eb",false)})
       .bindPopup(`<strong>🚩 Xuất phát Ngày 1</strong><br/>${escHtml(s0.name)}`)
       .addTo(lmap);
     lmarkers.push(sm); pts.push([s0.lat,s0.lon]);
   }
-  const osrmTimes=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?getDisplayTimesForDay(st.sel_day,stops):{};
+  const osrmTimes=fullDayNoFilter?getDisplayTimesForDay(st.sel_day,stops):{};
   stops.forEach(s=>{
     const ci=getCI(s.name);
     const meta=getShopMeta(s.name)||s;
@@ -144,15 +160,15 @@ function renderMap(){
       .addTo(lmap);
     lmarkers.push(m); lmarkerByStt[s.stt]=m; pts.push([s.lat,s.lon]);
   });
-  const h=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.hotels_by_day[st.sel_day]:null;
-  if(h?.lat!=null&&h?.lon!=null&&h.type!=="last_shop"){
+  const h=(perDayMode&&st.status_filter==="all")?st.hotels_by_day[st.sel_day]:null;
+  if(h?.lat!=null&&h?.lon!=null&&h.type!=="last_shop"&&hotelMatchesFilter(h,stops)){
     const hm=L.marker([h.lat,h.lon],{icon:mkIcon("H","#e67e22",false)})
       .bindPopup(`<strong>🏨 ${escHtml(h.name)}</strong><br/>Cách điểm cuối ~${(h.dist||0).toFixed(1)} km<br/><a class="popup-nav" href="https://www.google.com/maps/dir/?api=1&destination=${h.lat},${h.lon}&travelmode=driving${st.mode==="oto"&&st.avoid_highways?"&avoid=highways":""}" target="_blank" rel="noopener noreferrer">🧭 Chỉ đường</a>`)
       .addTo(lmap);
     lmarkers.push(hm); pts.push([h.lat,h.lon]);
   }
 
-  const osrm=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.osrm_by_day[st.sel_day]:null;
+  const osrm=fullDayNoFilter?st.osrm_by_day[st.sel_day]:null;
   if(!st.search&&st.status_filter==="all"){
     if(osrm?.alt?.polyline?.length>=2&&st.mode==="oto"){
       lpolyAlt=L.polyline(osrm.alt.polyline,{color:"#94a3b8",weight:3,opacity:.65,dashArray:"5,5"}).addTo(lmap);
@@ -263,7 +279,7 @@ function checkNearbyStop(){
 }
 function dismissNear(name){st.dismissed_near[name]=true;document.getElementById("near-banner").classList.remove("show");}
 
-// ── Thuật toán định tuyến (Hỗ trợ điểm đầu + điểm cuối + ngược) ──
+// ── Thuật toán định tuyến ──────────────────────────────────
 const hav=(a,b,c,d)=>{const r=x=>x*Math.PI/180,p1=r(a),p2=r(c),dp=r(c-a),dl=r(d-b);let v=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;return 2*EAR*Math.asin(Math.sqrt(Math.min(1,Math.max(0,v))));};
 const rdist=(a,b,c,d)=>hav(a,b,c,d)*ROAD;
 
@@ -353,6 +369,20 @@ function routeByProvince(shops,from=null,to=null,prioritizeDueProvs=false){
   return out;
 }
 
+function routeFarToNear(shops,fromPt=null,toPt=null,byProv=false,prioritizeDue=false){
+  if(shops.length<2)return shops;
+  const anchor=toPt||fromPt||shops[0];
+  let far=shops[0],maxD=-1;
+  shops.forEach(s=>{const d=hav(anchor.lat,anchor.lon,s.lat,s.lon);if(d>maxD){maxD=d;far=s;}});
+  const rest=shops.filter(s=>s!==far);
+  if(byProv){
+    const ord=routeByProvince(rest,far,toPt,prioritizeDue);
+    return[far,...ord];
+  }
+  const ord=twoOptEndpoints(nn(rest,far),far,toPt);
+  return[far,...ord];
+}
+
 function nearestHotel(s,hotels){
   if(!hotels?.length)return null;
   let best=null,md=Infinity;
@@ -364,15 +394,15 @@ function resolveDayEnd(day,lastShop,hotels,dayEndMap=st.day_end_points){
   const ov=dayEndMap[day];
   if(ov){
     if(ov.type==="last_shop"){
-      return{name:lastShop.name,lat:lastShop.lat,lon:lastShop.lon,dist:0,type:"last_shop"};
+      return{name:lastShop.name,lat:lastShop.lat,lon:lastShop.lon,province:lastShop.province,dist:0,type:"last_shop"};
     }
     if(ov.lat!=null&&ov.lon!=null){
       if(ov.type==="hotel"){
         const mh=hotels.find(h=>h.name===ov.name);
         const h=mh||ov;
-        return{name:h.name,lat:h.lat,lon:h.lon,province:h.province||"",dist:rdist(lastShop.lat,lastShop.lon,h.lat,h.lon),type:"hotel"};
+        return{name:h.name,lat:h.lat,lon:h.lon,province:h.province||lastShop.province,dist:rdist(lastShop.lat,lastShop.lon,h.lat,h.lon),type:"hotel"};
       }
-      return{name:ov.name||"Điểm tuỳ chỉnh",lat:ov.lat,lon:ov.lon,dist:rdist(lastShop.lat,lastShop.lon,ov.lat,ov.lon),type:"custom"};
+      return{name:ov.name||"Điểm tuỳ chỉnh",lat:ov.lat,lon:ov.lon,province:ov.province||lastShop.province,dist:rdist(lastShop.lat,lastShop.lon,ov.lat,ov.lon),type:"custom"};
     }
   }
   return nearestHotel(lastShop,hotels);
@@ -409,9 +439,11 @@ function showDuplicates(){
 function computeSchedule(ordered,hotels,dayEndMap=st.day_end_points,overrideMax=null,tripEnd=st.trip_end_point){
   const prof=MODES[st.mode]||MODES.xemay;
   const mx=overrideMax||st.max_shops||prof.max;
+  const maxKm=st.max_km||prof.maxKm;
   const{we,svc:defSvc}=getWorkCfg();
   const wsDay1=getWorkCfg(1).ws;
-  const sch=[],hbd={};let day=1,cnt=0,cur=wsDay1,prev=null,dayStt=0;
+  const sch=[],hbd={},dayKmOver={};
+  let day=1,cnt=0,cur=wsDay1,prev=null,dayStt=0,dayKm=0;
 
   ordered.forEach((s,idx)=>{
     const svcMin=Number(s.svcMin)>0?Number(s.svcMin):defSvc;
@@ -423,30 +455,35 @@ function computeSchedule(ordered,hotels,dayEndMap=st.day_end_points,overrideMax=
         const d0=rdist(sp0.lat,sp0.lon,s.lat,s.lon);
         const m0=(d0/prof.spd)*60;const o0=adv(wsDay1,m0,svcMin);
         sch.push({...s,stt:1,dayStt,day,distKm:d0,arriveTime:fmt(o0.arrive),departTime:fmt(o0.depart),overtime:o0.depart>we});
-        cur=o0.depart;
+        cur=o0.depart;dayKm=d0;
       }else{
         sch.push({...s,stt:1,dayStt,day,distKm:0,arriveTime:fmt(wsDay1),departTime:fmt(wsDay1+svcMin),overtime:(wsDay1+svcMin)>we});
-        cur=wsDay1+svcMin;
+        cur=wsDay1+svcMin;dayKm=0;
       }
+      if(dayKm>maxKm)dayKmOver[day]=dayKm;
       cnt=1;prev=s;return;
     }
 
     const dist=rdist(prev.lat,prev.lon,s.lat,s.lon);
     const tmn=(dist/prof.spd)*60;const cand=adv(cur,tmn,svcMin);
-    const needNewDay=(cnt>=mx||cand.depart>we||forcedMinDay>day);
+    const needNewDay=(cnt>=mx||cand.depart>we||forcedMinDay>day||(dayKm+dist>maxKm));
 
     if(needNewDay){
       hbd[day]=resolveDayEnd(day,sch[sch.length-1],hotels,dayEndMap);
+      const endD=(hbd[day]&&hbd[day].type!=="last_shop")?(hbd[day].dist||0):0;
+      if(dayKm+endD>maxKm)dayKmOver[day]=dayKm+endD;
+
       day++;cnt=1;dayStt=1;
       const wsCur=getWorkCfg(day).ws;
       const sp=hbd[day-1]||sch[sch.length-1];
       const md=rdist(sp.lat,sp.lon,s.lat,s.lon);const mm=(md/prof.spd)*60;const mo=adv(wsCur,mm,svcMin);
       sch.push({...s,stt:idx+1,dayStt,day,distKm:md,arriveTime:fmt(mo.arrive),departTime:fmt(mo.depart),overtime:mo.depart>we});
-      cur=mo.depart;prev=s;
+      cur=mo.depart;dayKm=md;prev=s;
+      if(dayKm>maxKm)dayKmOver[day]=dayKm;
     }else{
       dayStt++;
       sch.push({...s,stt:idx+1,dayStt,day,distKm:dist,arriveTime:fmt(cand.arrive),departTime:fmt(cand.depart),overtime:cand.depart>we});
-      cur=cand.depart;cnt++;prev=s;
+      cur=cand.depart;cnt++;dayKm+=dist;prev=s;
     }
   });
 
@@ -455,15 +492,17 @@ function computeSchedule(ordered,hotels,dayEndMap=st.day_end_points,overrideMax=
     if(dayEndMap[day]){
       hbd[day]=resolveDayEnd(day,lastStop,hotels,dayEndMap);
     }else if(tripEnd?.lat!=null&&tripEnd?.lon!=null){
-      hbd[day]={name:tripEnd.name||"Điểm kết thúc",lat:tripEnd.lat,lon:tripEnd.lon,dist:rdist(lastStop.lat,lastStop.lon,tripEnd.lat,tripEnd.lon),type:tripEnd.type||"custom"};
+      hbd[day]={name:tripEnd.name||"Điểm kết thúc",lat:tripEnd.lat,lon:tripEnd.lon,province:tripEnd.province||lastStop.province,dist:rdist(lastStop.lat,lastStop.lon,tripEnd.lat,tripEnd.lon),type:tripEnd.type||"custom"};
     }else{
       hbd[day]=resolveDayEnd(day,lastStop,hotels,dayEndMap);
     }
+    const endD=(hbd[day]&&hbd[day].type!=="last_shop")?(hbd[day].dist||0):0;
+    if(dayKm+endD>maxKm)dayKmOver[day]=dayKm+endD;
   }
 
   let totalKm=sch.reduce((a,x)=>a+(x.distKm||0),0);
   Object.values(hbd).forEach(h=>{if(h&&h.type!=="last_shop")totalKm+=(h.dist||0);});
-  return{sch,hbd,totalDays:day,totalKm};
+  return{sch,hbd,dayKmOver,totalDays:day,totalKm};
 }
 
 function getDisplayTimesForDay(day,dayStops){
@@ -536,11 +575,11 @@ function buildSchedule(customOrder=null){
       dayCnt[x.day]=(dayCnt[x.day]||0)+1;
       return{...x,dayStt:dayCnt[x.day]};
     });
-    st.hotels_by_day={};
+    st.hotels_by_day={};st.day_km_over={};
     precomputed.forEach(x=>{
       if(x.nightHotel){
         const mh=hotels.find(h=>h.name===x.nightHotel);
-        st.hotels_by_day[x.day]={name:x.nightHotel,dist:x.hotelDist||0,lat:mh?.lat,lon:mh?.lon,type:"hotel"};
+        st.hotels_by_day[x.day]={name:x.nightHotel,dist:x.hotelDist||0,lat:mh?.lat,lon:mh?.lon,province:mh?.province||x.province,type:"hotel"};
       }
     });
   }else{
@@ -557,7 +596,7 @@ function buildSchedule(customOrder=null){
       ordered=routeByProvince(pool,st.day_end_points[0]||null,st.trip_end_point||null);
     }
     const res=computeSchedule(ordered,hotels);
-    st.schedule=res.sch;st.hotels_by_day=res.hbd;
+    st.schedule=res.sch;st.hotels_by_day=res.hbd;st.day_km_over=res.dayKmOver;
   }
   st.osrm_by_day={};
   const totalDays=st.schedule.reduce((m,s)=>Math.max(m,s.day),0);
@@ -635,9 +674,10 @@ async function importExcelFile(f){
     st.day_start_times={};
     st.postponed_day={};
     st.trip_end_point=null;
+    st.sel_provinces=[];
     st.only_due=false;
     st.needs_reopt=false;
-    ["lt_order","lt_day_ends","lt_day_starts","lt_postponed","lt_trip_end","lt_only_due","lt_reopt"].forEach(k=>localStorage.removeItem(k));
+    ["lt_order","lt_day_ends","lt_day_starts","lt_postponed","lt_trip_end","lt_sel_provs","lt_only_due","lt_reopt"].forEach(k=>localStorage.removeItem(k));
     localStorage.setItem("lt_raw",JSON.stringify(st.raw));
     st.sel_day=1;refreshAll();
     const renamedCnt=dShops.renamed+dHotels.renamed+dPre.renamed;
@@ -728,7 +768,7 @@ async function autoFillAddress(lat,lon,forceFill=false){
   }
 }
 
-// ── THÊM / SỬA / XOÁ ĐIỂM & CHẾ ĐỘ KÉO THẢ SẮP XẾP ──────────
+// ── THÊM / SỬA / XOÁ ĐIỂM & KÉO THẢ ─────────────────────────
 let ptType="shop",editTarget=null,miniMap=null,miniMarker=null,suggestHits=[];
 
 function toggleEditMode(){
@@ -954,7 +994,7 @@ function moveStop(stt,dir){
   reorderByStt(stt,st.schedule[target].stt);
 }
 
-// Kéo-giữ bằng tay cầm ⋮⋮ (Pointer Events mượt cả Mobile & Desktop)
+// Kéo-giữ bằng tay cầm ⋮⋮
 let dragState=null;
 const listEl=document.getElementById("schedule-list");
 listEl.addEventListener("pointerdown",e=>{
@@ -1316,7 +1356,7 @@ function uncheckFromNote(){
   toast("⬜ Đã huỷ Check-in");
 }
 
-// ── TỐI ƯU & SO SÁNH 3 PHƯƠNG ÁN (ĐIỂM ĐẦU + CUỐI + NGƯỢC) ─
+// ── TỐI ƯU & SO SÁNH 3 PHƯƠNG ÁN + KHU VỰC TỈNH ───────────
 let optCandidates=[];
 
 function openOptimize(){
@@ -1328,13 +1368,37 @@ function openOptimize(){
   eSel.innerHTML='<option value="">-- Tự do (Không cố định) --</option><option value="__SAME__">🔁 Quay về lại điểm xuất phát</option><option value="__GPS__">📍 Vị trí GPS hiện tại</option>';
   st.raw.hotels.forEach(h=>{eSel.innerHTML+=`<option value="${escHtml(h.name)}">${escHtml(h.name)} (KS)</option>`;});
 
+  const provs=getAllProvinces();
+  const areaWrap=document.getElementById("opt-area-wrap");
+  const areaChips=document.getElementById("opt-area-chips");
+  if(provs.length>1){
+    areaWrap.style.display="block";
+    areaChips.innerHTML=provs.map(p=>{
+      const chk=st.sel_provinces.length===0||st.sel_provinces.includes(p);
+      return`<label class="area-chip${chk?" chk":""}">
+        <input type="checkbox" value="${escHtml(p)}" ${chk?"checked":""} onchange="this.closest('.area-chip').classList.toggle('chk',this.checked)"/>
+        ${escHtml(p)}
+      </label>`;
+    }).join("");
+  }else{
+    areaWrap.style.display="none";
+    areaChips.innerHTML="";
+  }
+
   document.getElementById("opt-target-days").value="0";
   document.getElementById("opt-dir").value="normal";
   document.getElementById("opt-only-due").checked=st.only_due;
-  document.getElementById("opt-info").innerHTML='Chọn điểm xuất phát, điểm kết thúc & số ngày mong muốn để so sánh 3 phương án tối ưu.';
+  document.getElementById("opt-compare-wrap").style.display="none";
+  document.getElementById("opt-info").innerHTML=`Chọn điểm xuất phát, điểm kết thúc & khu vực (giới hạn <strong>${st.max_km} km/ngày</strong>).`;
   document.getElementById("opt-plans-box").innerHTML="";
   optCandidates=[];
   openDlg("opt-dialog");
+}
+
+function getCheckedOptAreas(){
+  const cbs=document.querySelectorAll("#opt-area-chips input[type=checkbox]");
+  if(!cbs.length)return[];
+  return[...cbs].filter(c=>c.checked).map(c=>c.value);
 }
 
 function resolveOptPoint(val,gpsPos){
@@ -1352,6 +1416,14 @@ async function runOptimize(){
   const dirMode=document.getElementById("opt-dir").value;
   const wantOnlyDue=document.getElementById("opt-only-due").checked;
   const btn=document.getElementById("btn-run-opt");
+
+  const provs=getAllProvinces();
+  let selectedAreas=getCheckedOptAreas();
+  if(provs.length>1&&selectedAreas.length===0){
+    alert("Vui lòng chọn ít nhất 1 tỉnh/khu vực để tối ưu!");
+    return;
+  }
+  const isPartialAreas=(provs.length>1&&selectedAreas.length<provs.length);
 
   let gpsPos=null;
   if(startVal==="__GPS__"||endVal==="__GPS__"){
@@ -1376,55 +1448,75 @@ async function runOptimize(){
   }
 
   let allShops=(st.raw.shops.length?st.raw.shops:st.raw.precomputed).map(s=>({...s}));
+  let inAreaShops=isPartialAreas?allShops.filter(s=>selectedAreas.includes(s.province)):allShops;
+  const outAreaShops=isPartialAreas?allShops.filter(s=>!selectedAreas.includes(s.province)):[];
+
   let effectiveOnlyDue=wantOnlyDue;
   if(wantOnlyDue){
-    const due=allShops.filter(s=>{const vs=getVisitStatus(s);return vs&&(vs.state==="overdue"||vs.state==="due");});
-    if(due.length)allShops=due;
+    const due=inAreaShops.filter(s=>{const vs=getVisitStatus(s);return vs&&(vs.state==="overdue"||vs.state==="due");});
+    if(due.length)inAreaShops=due;
     else{
-      alert("Hiện chưa có cửa hàng nào Đến/Quá hạn. Sẽ phân tích trên toàn bộ danh sách.");
+      alert("Hiện chưa có cửa hàng nào Đến/Quá hạn trong khu vực đang chọn. Sẽ phân tích toàn bộ khu vực đó.");
       effectiveOnlyDue=false;
       document.getElementById("opt-only-due").checked=false;
     }
   }
 
-  const beforeKm=st.schedule.reduce((s,x)=>s+(x.distKm||0),0)
-    +Object.values(st.hotels_by_day).reduce((s,h)=>s+(h&&h.type!=="last_shop"?(h.dist||0):0),0);
+  const simBefore=computeSchedule(inAreaShops,st.raw.hotels,st.day_end_points,null,toPt);
+  const beforeKm=simBefore.totalKm;
+  const beforeDays=simBefore.totalDays;
 
   const simDayEnd={...st.day_end_points};
   if(startVal)simDayEnd[0]=fromPt;
 
-  const overrideMax=targetDays>0?Math.max(1,Math.ceil(allShops.length/targetDays)):null;
+  const overrideMax=targetDays>0?Math.max(1,Math.ceil(inAreaShops.length/targetDays)):null;
 
-  // Nếu chọn "Đi xa trước → Về gần sau": đảo vai trò from/to khi tính tuyến rồi lật ngược mảng
   const runWithDir=(fn)=>arr=>{
     if(dirMode==="reverse"){
-      const anchor=toPt||fromPt||arr[0];
-      const fwd=fn(arr,anchor,fromPt);
-      return fwd.reverse();
+      return routeFarToNear(arr,fromPt,toPt,fn.isProv,fn.due);
     }
-    return fn(arr,fromPt,toPt);
+    return fn.run(arr,fromPt,toPt);
   };
 
   const defs=[
-    {title:"PA 1 · Theo cụm Tỉnh",desc:"Đi gọn từng tỉnh, ít chạy qua lại",algo:runWithDir((a,f,t)=>routeByProvince(a,f,t,false))},
-    {title:"PA 2 · Ngắn nhất (Xuyên tỉnh)",desc:"Tối ưu tổng km ngắn nhất kể cả chặng về",algo:runWithDir((a,f,t)=>twoOptEndpoints(nn(a,f),f,t))},
-    {title:"PA 3 · Ưu tiên Đến/Quá hạn",desc:"Cụm tỉnh có điểm quá hạn đi trước",algo:runWithDir((a,f,t)=>routeByProvince(a,f,t,true))}
+    {title:"PA 1 · Theo cụm Tỉnh",desc:"Đi gọn từng tỉnh, ít chạy qua lại",algo:runWithDir({isProv:true,due:false,run:(a,f,t)=>routeByProvince(a,f,t,false)})},
+    {title:"PA 2 · Ngắn nhất (Xuyên tỉnh)",desc:"Tối ưu tổng km ngắn nhất kể cả chặng về",algo:runWithDir({isProv:false,due:false,run:(a,f,t)=>twoOptEndpoints(nn(a,f),f,t)})},
+    {title:"PA 3 · Ưu tiên Đến/Quá hạn",desc:"Cụm tỉnh có điểm quá hạn đi trước",algo:runWithDir({isProv:true,due:true,run:(a,f,t)=>routeByProvince(a,f,t,true)})}
   ];
 
   optCandidates=defs.map(d=>{
-    const ordered=d.algo(allShops.map(x=>({...x})));
-    const sim=computeSchedule(ordered,st.raw.hotels,simDayEnd,overrideMax,toPt);
-    return{...d,ordered,totalKm:sim.totalKm,totalDays:sim.totalDays,saved:beforeKm-sim.totalKm,fromPt:startVal?fromPt:null,toPt,overrideMax,targetDays,onlyDue:effectiveOnlyDue};
+    const optPart=d.algo(inAreaShops.map(x=>({...x})));
+    const simPart=computeSchedule(optPart,st.raw.hotels,simDayEnd,overrideMax,toPt);
+    const fullOrdered=isPartialAreas?[...optPart,...outAreaShops]:optPart;
+    return{
+      ...d,ordered:fullOrdered,
+      totalKm:simPart.totalKm,totalDays:simPart.totalDays,saved:beforeKm-simPart.totalKm,
+      beforeKm,beforeDays,
+      fromPt:startVal?fromPt:null,toPt,overrideMax,targetDays,onlyDue:effectiveOnlyDue,
+      filterProvs:isPartialAreas?selectedAreas:[]
+    };
   });
 
   let minKm=Infinity,bestIdx=0;
   optCandidates.forEach((p,i)=>{if(p.totalKm<minKm){minKm=p.totalKm;bestIdx=i;}});
+  const bestP=optCandidates[bestIdx];
+  const bestPct=beforeKm>0?Math.round((bestP.saved/beforeKm)*100):0;
 
-  document.getElementById("opt-info").innerHTML=`🛣️ Tuyến hiện tại (gồm cả về chỗ nghỉ): <strong>~${beforeKm.toFixed(1)} km</strong> (${allShops.length} điểm). Chọn phương án phù hợp nhất:`;
+  const cw=document.getElementById("opt-compare-wrap");
+  cw.style.display="block";
+  cw.innerHTML=`
+    ${bestP.saved>0.5?`<div class="opt-saving"><span>💚 Gợi ý tốt nhất giúp tiết kiệm ~${bestP.saved.toFixed(1)} km</span><span style="font-size:17px;">-${bestPct}%</span></div>`:""}
+    <div class="opt-compare">
+      <div class="opt-box"><div class="ob-label">TRƯỚC TỐI ƯU</div><div class="ob-km">${beforeKm.toFixed(0)} km</div><div class="ob-sub">${beforeDays} ngày</div></div>
+      <div class="opt-arrow">→</div>
+      <div class="opt-box after"><div class="ob-label">PHƯƠNG ÁN TỐT NHẤT</div><div class="ob-km">${bestP.totalKm.toFixed(0)} km</div><div class="ob-sub">${bestP.totalDays} ngày</div></div>
+    </div>`;
+
+  document.getElementById("opt-info").innerHTML=`Phân tích <strong>${inAreaShops.length} điểm</strong>${isPartialAreas?` (${selectedAreas.join(", ")})`:""} với giới hạn <strong>${st.max_km} km/ngày</strong>. Chọn 1 phương án bên dưới để áp dụng:`;
   document.getElementById("opt-plans-box").innerHTML=optCandidates.map((p,i)=>{
     const isBest=i===bestIdx;
     const diffTxt=p.saved>=0?`💚 Tiết kiệm ~${p.saved.toFixed(1)} km`:`🔸 +${Math.abs(p.saved).toFixed(1)} km`;
-    const dayWarn=(targetDays>0&&p.totalDays>targetDays)?`<div style="color:var(--red);font-size:11.5px;">⚠️ Cần ${p.totalDays} ngày để không lố giờ làm (mục tiêu ${targetDays} ngày)</div>`:"";
+    const dayWarn=(targetDays>0&&p.totalDays>targetDays)?`<div style="color:var(--red);font-size:11.5px;">⚠️ Cần ${p.totalDays} ngày để không vượt ${st.max_km} km/ngày hoặc quá giờ</div>`:"";
     return`<div class="plan-card${isBest?" best":""}">
       <div class="plan-info">
         <strong>${escHtml(p.title)}${isBest?" ⭐ Ngắn nhất":""}</strong>
@@ -1451,8 +1543,12 @@ function applyOptPlan(idx){
     st.max_shops=p.overrideMax;
     localStorage.setItem("lt_max",String(st.max_shops));
   }
-  st.postponed_day={};
-  localStorage.removeItem("lt_postponed");
+
+  Object.keys(st.postponed_day).forEach(nm=>{if(getCI(nm))delete st.postponed_day[nm];});
+  localStorage.setItem("lt_postponed",JSON.stringify(st.postponed_day));
+
+  st.sel_provinces=p.filterProvs||[];
+  localStorage.setItem("lt_sel_provs",JSON.stringify(st.sel_provinces));
 
   st.only_due=p.onlyDue;
   st.excel_src="optimize";
@@ -1475,6 +1571,38 @@ function exitOnlyDueMode(){
   st.sel_day=1;
   refreshAll();
   toast("📋 Đã khôi phục hiển thị toàn bộ cửa hàng");
+}
+
+// ── Bộ lọc Tỉnh (Đồng bộ Danh sách + Bản đồ + Tab Ngày + Tuyến ngày) ──
+function toggleProvince(prov){
+  const idx=st.sel_provinces.indexOf(prov);
+  if(idx>=0)st.sel_provinces.splice(idx,1);
+  else st.sel_provinces.push(prov);
+  localStorage.setItem("lt_sel_provs",JSON.stringify(st.sel_provinces));
+  renderUI();renderMap();
+}
+
+function clearProvinceFilter(){
+  st.sel_provinces=[];
+  localStorage.setItem("lt_sel_provs","[]");
+  renderUI();renderMap();
+}
+
+function renderProvBar(){
+  const bar=document.getElementById("prov-filter-bar");
+  if(!bar)return;
+  const provs=getAllProvinces();
+  if(provs.length<=1){bar.style.display="none";return;}
+  bar.style.display="flex";
+  const base=baseStops();
+  let html=`<button class="prov-chip${st.sel_provinces.length===0?" active":""}" onclick="clearProvinceFilter()">🌏 Tất cả <span class="chip-cnt">${base.length}</span></button>`;
+  provs.forEach(p=>{
+    const cnt=base.filter(s=>s.province===p).length;
+    if(!cnt&&!st.sel_provinces.includes(p))return;
+    const act=st.sel_provinces.includes(p);
+    html+=`<button class="prov-chip${act?" active":""}" onclick="toggleProvince(${JSON.stringify(p).replace(/"/g,"&quot;")})">${escHtml(p)} <span class="chip-cnt">${cnt}</span></button>`;
+  });
+  bar.innerHTML=html;
 }
 
 // ── Thời tiết (08-17h) + OSRM Đường bộ & Khuyến nghị Cao tốc ──
@@ -1531,11 +1659,11 @@ function toggleAvoidHighwaysQuick(){
 
 function renderDayMetaBar(){
   const bar=document.getElementById("day-meta-bar");
-  const base=baseStops();
   const vis=visibleStops();
-  const doneCnt=base.filter(s=>!!getCI(s.name)).length;
-  const osrm=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.osrm_by_day[st.sel_day]:null;
-  const hEnd=(!st.search&&st.status_filter==="all"&&st.sel_day!==0)?st.hotels_by_day[st.sel_day]:null;
+  const doneCnt=vis.filter(s=>!!getCI(s.name)).length;
+  const fullDayNoFilter=(!st.search&&st.status_filter==="all"&&st.sel_provinces.length===0&&st.sel_day!==0);
+  const osrm=fullDayNoFilter?st.osrm_by_day[st.sel_day]:null;
+  const hEnd=fullDayNoFilter?st.hotels_by_day[st.sel_day]:null;
   const fallbackKm=vis.reduce((s,x)=>s+(x.distKm||0),0)+(hEnd&&hEnd.type!=="last_shop"?(hEnd.dist||0):0);
   const km=osrm?osrm.totalKm:fallbackKm;
   const dupChip=st.duplicates.length?`<span class="meta-chip warn" onclick="showDuplicates()">⚠️ ${st.duplicates.length} trùng</span>`:"";
@@ -1543,7 +1671,7 @@ function renderDayMetaBar(){
   if(st.sel_day===0||st.search){
     bar.innerHTML=`
       <div class="day-meta-info">
-        <span class="meta-chip prog">✅ ${doneCnt}/${base.length} điểm</span>
+        <span class="meta-chip prog">✅ ${doneCnt}/${vis.length} điểm</span>
         <span class="meta-chip">🛣️ ~${km.toFixed(1)} km</span>
         ${dupChip}
       </div>
@@ -1553,6 +1681,8 @@ function renderDayMetaBar(){
 
   const cal=st.day_calendar[st.sel_day];
   const wx=cal?st.weather_by_day[`${st.sel_day}_${cal.iso}`]:null;
+  const maxKm=st.max_km||(MODES[st.mode]||MODES.xemay).maxKm;
+  const isKmOver=(km>maxKm+0.5);
   let kmTxt=`~${km.toFixed(1)} km`;
   if(osrm){
     const hh=Math.floor(osrm.totalMin/60),mm=osrm.totalMin%60;
@@ -1562,7 +1692,6 @@ function renderDayMetaBar(){
   let hwChip="";
   if(st.mode==="oto"){
     if(osrm?.alt){
-      const diffKm=osrm.alt.totalKm-osrm.totalKm;
       const diffMin=osrm.alt.totalMin-osrm.totalMin;
       hwChip=`<span class="meta-chip road" style="cursor:pointer;" title="Chạm để bật/tắt Tránh cao tốc khi mở Google Maps" onclick="toggleAvoidHighwaysQuick()">🚗 ${st.avoid_highways?"Đường thường":"Nhanh/Cao tốc"} · Alt: ${osrm.alt.totalKm.toFixed(0)}km (+${diffMin}p)</span>`;
     }else{
@@ -1577,8 +1706,8 @@ function renderDayMetaBar(){
       ${cal?`<span class="meta-chip">📅 ${escHtml(cal.weekday)} ${escHtml(cal.solar)} (${escHtml(cal.lunar)})</span>`:""}
       ${cal?.holiday?`<span class="meta-chip hol">🎉 ${escHtml(cal.holiday)}</span>`:(cal?.isSunday?`<span class="meta-chip hol">☀️ CN</span>`:"")}
       ${wxLabel?`<span class="meta-chip wx" title="Dự báo trong khung giờ làm việc">${wxLabel}</span>`:""}
-      <span class="meta-chip">${kmTxt}</span>
-      <span class="meta-chip prog">✅ ${doneCnt}/${base.length}</span>
+      <span class="meta-chip${isKmOver?" over":""}" title="Giới hạn hiện tại: ${maxKm} km/ngày">${isKmOver?"⚠️ ":""}${kmTxt}</span>
+      <span class="meta-chip prog">✅ ${doneCnt}/${vis.length}</span>
       ${hwChip}
       ${dupChip}
     </div>
@@ -1676,6 +1805,7 @@ function openStatsDialog(){
   `;
   openDlg("stats-dialog");
 }
+
 async function copyAllNotesReport(){
   const lines=["📝 TỔNG HỢP GHI CHÚ ĐƠN HÀNG:"];
   let cnt=0;
@@ -1727,10 +1857,11 @@ function baseStops(){
 }
 
 function visibleStops(){
-  const list=baseStops();
-  if(st.status_filter==="todo")return list.filter(s=>!getCI(s.name));
-  if(st.status_filter==="done")return list.filter(s=>!!getCI(s.name));
-  if(st.status_filter==="due")return list.filter(s=>{const vs=getVisitStatus(getShopMeta(s.name)||s);return vs&&(vs.state==="overdue"||vs.state==="due");});
+  let list=baseStops();
+  if(st.sel_provinces.length>0)list=list.filter(s=>st.sel_provinces.includes(s.province));
+  if(st.status_filter==="todo")list=list.filter(s=>!getCI(s.name));
+  else if(st.status_filter==="done")list=list.filter(s=>!!getCI(s.name));
+  else if(st.status_filter==="due")list=list.filter(s=>{const vs=getVisitStatus(getShopMeta(s.name)||s);return vs&&(vs.state==="overdue"||vs.state==="due");});
   return list;
 }
 
@@ -1745,7 +1876,7 @@ function getDayNavList(){
   const list=(todo.length>0&&todo.length<stops.length)?[...todo]:[...stops];
   if(st.inc_hotel_route&&!st.search&&st.sel_day!==0){
     const h=st.hotels_by_day[st.sel_day];
-    if(h?.lat!=null&&h?.lon!=null&&h.type!=="last_shop")list.push(h);
+    if(h?.lat!=null&&h?.lon!=null&&h.type!=="last_shop"&&hotelMatchesFilter(h,stops))list.push(h);
   }
   return list;
 }
@@ -1797,41 +1928,102 @@ function onClickDayNav(e){
   return true;
 }
 
+// ── Bottom Nav ──────────────────────────────────────────────
+function renderBottomNav(){
+  const bn=document.getElementById("bottom-nav");
+  if(!bn)return;
+  const tab=st.bnav_tab||"list";
+  bn.innerHTML=`
+    <button class="bnav-item${tab==="map"?" active":""}" onclick="bnavSwitch('map')">
+      <span class="bnav-icon">🗺️</span>Bản đồ
+    </button>
+    <button class="bnav-item${tab==="list"?" active":""}" onclick="bnavSwitch('list')">
+      <span class="bnav-icon">📋</span>Lịch trình
+    </button>
+    <button class="bnav-item" onclick="bnavSwitch('add')">
+      <span class="bnav-icon">➕</span>Thêm
+    </button>
+    <button class="bnav-item opt-btn" onclick="bnavSwitch('opt')">
+      <span class="bnav-icon">⚡</span>Tối ưu
+      <span class="bnav-dot${st.needs_reopt?" show":""}"></span>
+    </button>
+    <button class="bnav-item" onclick="bnavSwitch('cfg')">
+      <span class="bnav-icon">⚙️</span>Cài đặt
+    </button>`;
+}
+
+function bnavSwitch(tab){
+  if(tab==="add"){openPointDialog("shop");return;}
+  if(tab==="opt"){openOptimize();return;}
+  if(tab==="cfg"){openSettings();return;}
+  st.bnav_tab=tab;
+  if(tab==="map"){
+    document.body.classList.remove("map-collapsed");
+    document.body.classList.add("map-expanded");
+  }else{
+    document.body.classList.remove("map-expanded","map-collapsed");
+  }
+  setTimeout(()=>lmap.invalidateSize(),220);
+  renderBottomNav();
+}
+
 // ── Render UI ───────────────────────────────────────────────
 function toggleModeQuick(){
   const next=st.mode==="xemay"?"oto":"xemay";
   st.mode=next;
   st.max_shops=MODES[next].max;
+  st.max_km=MODES[next].maxKm;
+  st.excel_src="optimize";
   localStorage.setItem("lt_mode",next);
   localStorage.setItem("lt_max",String(st.max_shops));
+  localStorage.setItem("lt_max_km",String(st.max_km));
+  localStorage.setItem("lt_src","optimize");
   st.sel_day=1;
   refreshAll();
-  toast(`Đã chuyển sang ${MODES[next].label} (max ${st.max_shops} điểm/ngày)`);
+  toast(`Đã chuyển sang ${MODES[next].label} (max ${st.max_shops} điểm · ${st.max_km} km/ngày)`);
 }
-function selectDay(d){st.sel_day=d;clearSearch();renderUI();renderMap();loadDayExtras();}
+
+function selectDay(d){
+  st.sel_day=d;
+  if(d>0&&st.sel_provinces.length>0){
+    const hasMatch=st.schedule.some(s=>s.day===d&&st.sel_provinces.includes(s.province));
+    if(!hasMatch){
+      st.sel_provinces=[];
+      localStorage.setItem("lt_sel_provs","[]");
+      toast(`🌏 Đã hiện tất cả tỉnh cho Ngày ${d}`);
+    }
+  }
+  clearSearch();renderUI();renderMap();loadDayExtras();
+}
 
 function renderUI(){
   const prof=MODES[st.mode]||MODES.xemay;
   const totalDays=st.schedule.reduce((m,s)=>Math.max(m,s.day),0);
   const vis=visibleStops();
   const perDayMode=(!st.search&&st.sel_day!==0);
-  const osrmCur=(perDayMode&&st.status_filter==="all")?st.osrm_by_day[st.sel_day]:null;
-  const osrmTimes=(perDayMode&&st.status_filter==="all")?getDisplayTimesForDay(st.sel_day,vis):{};
+  const fullDayNoFilter=(perDayMode&&st.status_filter==="all"&&st.sel_provinces.length===0);
+  const osrmCur=fullDayNoFilter?st.osrm_by_day[st.sel_day]:null;
+  const osrmTimes=fullDayNoFilter?getDisplayTimesForDay(st.sel_day,vis):{};
 
-  document.getElementById("sub-title").textContent=`${st.mode==="xemay"?"🛵":"🚗"} ${prof.label} · ${getWorkCfg(st.sel_day>0?st.sel_day:1).ws?st.day_start_times[st.sel_day]||st.cfg.ws:st.cfg.ws}–${st.cfg.we} · max ${st.max_shops}/ngày ⇄`;
+  const activeWs=(st.sel_day>0&&st.day_start_times[st.sel_day])?st.day_start_times[st.sel_day]:st.cfg.ws;
+  document.getElementById("sub-title").textContent=`${st.mode==="xemay"?"🛵":"🚗"} ${prof.label} · ${activeWs}–${st.cfg.we} · ≤${st.max_km}km/ngày ⇄`;
   document.getElementById("opt-dot").classList.toggle("show",st.needs_reopt);
   document.getElementById("btn-edit-mode").classList.toggle("active",st.edit_mode);
 
+  const matchProv=s=>st.sel_provinces.length===0||st.sel_provinces.includes(s.province);
+  const totalMatching=st.schedule.filter(matchProv).length;
   const te=document.getElementById("day-tabs");
-  let th=`<button class="day-tab ${st.sel_day===0&&!st.search?"active":""}" onclick="selectDay(0)">Tất cả (${st.schedule.length})</button>`;
+  let th=`<button class="day-tab ${st.sel_day===0&&!st.search?"active":""}" onclick="selectDay(0)">Tất cả (${totalMatching})</button>`;
   for(let d=1;d<=totalDays;d++){
-    const c=st.schedule.filter(s=>s.day===d).length;
+    const c=st.schedule.filter(s=>s.day===d&&matchProv(s)).length;
     const cal=st.day_calendar[d];
     const warnOff=cal&&cal.isOff;
     th+=`<button class="day-tab ${st.sel_day===d&&!st.search?"active":""}${warnOff?" sunday":""}" onclick="selectDay(${d})">Ngày ${d}${cal?` · ${cal.solar}`:""} (${c})</button>`;
   }
   te.innerHTML=th;
   renderDayMetaBar();
+  renderProvBar();
+  renderBottomNav();
   syncNavActionLinks();
 
   const le=document.getElementById("schedule-list");
@@ -1844,7 +2036,7 @@ function renderUI(){
     </div>`;
   }
 
-  if(perDayMode&&st.status_filter==="all"&&vis.length){
+  if(fullDayNoFilter&&vis.length){
     const curStartVal=st.day_start_times[st.sel_day]||st.cfg.ws;
     if(st.sel_day===1){
       const s0=st.day_end_points[0];
@@ -1900,8 +2092,9 @@ function renderUI(){
     </div>`;
   });
 
-  if(perDayMode&&st.status_filter==="all"&&vis.length){
-    const h=st.hotels_by_day[st.sel_day];
+  const hEnd=(perDayMode&&st.status_filter==="all")?st.hotels_by_day[st.sel_day]:null;
+  if(perDayMode&&st.status_filter==="all"&&vis.length&&hotelMatchesFilter(hEnd,vis)){
+    const h=hEnd;
     const hasNext=st.sel_day<totalDays;
     const ret=getHotelReturnInfo(st.sel_day,vis);
     const subTxt=h?(h.type==="last_shop"?"Tại cửa hàng cuối ngày":`+${ret?ret.km.toFixed(1):(h.dist||0).toFixed(1)} km${ret?` (~${ret.min}p)`:""} về chỗ nghỉ`):"Tại điểm cuối cùng của ngày";
@@ -1914,7 +2107,7 @@ function renderUI(){
           <strong>${h?.type==="last_shop"?"📌":"🏨"} ${escHtml(h?.name||vis[vis.length-1].name)}</strong>
           <div class="shop-meta">${hasNext?`Chặng về & Bắt đầu N${st.sel_day+1}`:`Chặng về cuối Ngày ${st.sel_day}`} · ${subTxt}</div>
         </div>
-        <span class="shop-time${ret?.overtime?" overtime":" hotel"}">${ret?`Về ${ret.arriveTime}`:"Nghỉ đêm"}</span>
+        <span class="shop-time${ret?.overtime?" overtime":" hotel"}">${ret?`${ret.overtime?"⚠️ ":""}Về ${ret.arriveTime}`:"Nghỉ đêm"}</span>
       </div>
       <div class="shop-acts">
         ${h?.lat!=null&&h.type!=="last_shop"?`<a class="btn-sm green" href="${hu}" target="_blank" rel="noopener noreferrer">🧭 Đường</a>`:""}
@@ -1926,8 +2119,8 @@ function renderUI(){
 
   le.innerHTML=html||`<div style="text-align:center;padding:40px 16px;color:var(--muted);">
     <div style="font-size:36px;margin-bottom:12px;">🗺️</div>
-    <div style="font-weight:600;margin-bottom:6px;">${st.search||st.status_filter!=="all"?"Không có điểm phù hợp bộ lọc":"Chưa có dữ liệu"}</div>
-    <div style="font-size:13px;">${st.search||st.status_filter!=="all"?"Thử đổi bộ lọc hoặc xoá từ khóa tìm kiếm":"Mở ☰ Menu → Nhập Excel hoặc bấm ➕ Điểm để thêm mới"}</div>
+    <div style="font-weight:600;margin-bottom:6px;">${st.search||st.status_filter!=="all"||st.sel_provinces.length?"Không có điểm phù hợp bộ lọc":"Chưa có dữ liệu"}</div>
+    <div style="font-size:13px;">${st.search||st.status_filter!=="all"||st.sel_provinces.length?"Thử đổi bộ lọc hoặc xoá từ khóa tìm kiếm":"Mở ☰ Menu → Nhập Excel hoặc bấm ➕ Điểm để thêm mới"}</div>
   </div>`;
 }
 
@@ -1941,6 +2134,7 @@ function editShopByStt(stt){
 function openSettings(){
   document.getElementById("cfg-mode").value=st.mode;
   document.getElementById("cfg-max").value=st.max_shops;
+  document.getElementById("cfg-max-km").value=st.max_km;
   document.getElementById("cfg-svc").value=st.cfg.svc;
   document.getElementById("cfg-ws").value=st.cfg.ws;
   document.getElementById("cfg-we").value=st.cfg.we;
@@ -1953,11 +2147,17 @@ function openSettings(){
   document.getElementById("cfg-inc-hotel-route").checked=st.inc_hotel_route;
   openDlg("settings-dialog");
 }
-function onCfgModeChange(){const m=document.getElementById("cfg-mode").value;document.getElementById("cfg-max").value=MODES[m]?.max||4;}
+function onCfgModeChange(){
+  const m=document.getElementById("cfg-mode").value;
+  document.getElementById("cfg-max").value=MODES[m]?.max||4;
+  document.getElementById("cfg-max-km").value=MODES[m]?.maxKm||90;
+}
 function saveSettings(){
   st.mode=document.getElementById("cfg-mode").value;
   const mv=parseInt(document.getElementById("cfg-max").value,10);
+  const mk=parseInt(document.getElementById("cfg-max-km").value,10);
   st.max_shops=mv>0?mv:(MODES[st.mode]?.max||4);
+  st.max_km=mk>0?mk:(MODES[st.mode]?.maxKm||90);
   st.cfg={
     ws:document.getElementById("cfg-ws").value||"08:00",
     ls:document.getElementById("cfg-ls").value||"11:00",
@@ -1970,19 +2170,21 @@ function saveSettings(){
   st.skip_off_days=document.getElementById("cfg-skip-off").checked;
   st.avoid_highways=document.getElementById("cfg-avoid-hw").checked;
   st.inc_hotel_route=document.getElementById("cfg-inc-hotel-route").checked;
-  localStorage.setItem("lt_mode",st.mode);localStorage.setItem("lt_max",String(st.max_shops));
+  st.excel_src="optimize";
+  localStorage.setItem("lt_mode",st.mode);localStorage.setItem("lt_max",String(st.max_shops));localStorage.setItem("lt_max_km",String(st.max_km));
   localStorage.setItem("lt_cfg",JSON.stringify(st.cfg));
   localStorage.setItem("lt_start_date",st.start_date);localStorage.setItem("lt_skip_off",st.skip_off_days?"1":"0");
   localStorage.setItem("lt_nav_label",st.nav_label_mode);
   localStorage.setItem("lt_avoid_hw",st.avoid_highways?"1":"0");
   localStorage.setItem("lt_inc_hotel",st.inc_hotel_route?"1":"0");
+  localStorage.setItem("lt_src","optimize");
   closeDlg("settings-dialog");
   st.sel_day=1;refreshAll();
   toast("⚙️ Đã lưu cài đặt");
 }
 function resetData(){
   if(!confirm("Reset toàn bộ dữ liệu, lịch sử ghé, điểm xuất phát và thứ tự tối ưu?"))return;
-  ["lt_raw","lt_order","lt_day_ends","lt_day_starts","lt_postponed","lt_trip_end","lt_reopt","lt_start_date","lt_skip_off","lt_cfg","lt_history","lt_only_due","lt_ci","lt_avoid_hw","lt_nav_label","lt_inc_hotel","lt_fuel_rate"].forEach(k=>localStorage.removeItem(k));
+  ["lt_raw","lt_order","lt_day_ends","lt_day_starts","lt_postponed","lt_trip_end","lt_sel_provs","lt_reopt","lt_start_date","lt_skip_off","lt_cfg","lt_history","lt_only_due","lt_ci","lt_avoid_hw","lt_nav_label","lt_inc_hotel","lt_fuel_rate","lt_max_km"].forEach(k=>localStorage.removeItem(k));
   location.reload();
 }
 function clearCheckins(){
@@ -1995,12 +2197,13 @@ function clearCheckins(){
 
 function backupJSON(){
   const data={
-    version:3,
+    version:4,
     exportedAt:new Date().toISOString(),
     lt_raw:st.raw,lt_order:st.custom_order,lt_day_ends:st.day_end_points,
     lt_day_starts:st.day_start_times,lt_postponed:st.postponed_day,lt_trip_end:st.trip_end_point,
+    lt_sel_provs:st.sel_provinces,
     lt_ci:st.checkins,lt_history:st.visit_history,lt_cfg:st.cfg,
-    lt_mode:st.mode,lt_max:st.max_shops,lt_src:st.excel_src,
+    lt_mode:st.mode,lt_max:st.max_shops,lt_max_km:st.max_km,lt_src:st.excel_src,
     lt_start_date:st.start_date,lt_skip_off:st.skip_off_days,lt_only_due:st.only_due,
     lt_avoid_hw:st.avoid_highways,lt_nav_label:st.nav_label_mode,lt_inc_hotel:st.inc_hotel_route,lt_fuel_rate:st.fuel_rate
   };
@@ -2027,11 +2230,13 @@ document.getElementById("restore-json-input").addEventListener("change",async e=
     localStorage.setItem("lt_day_starts",JSON.stringify(d.lt_day_starts||{}));
     localStorage.setItem("lt_postponed",JSON.stringify(d.lt_postponed||{}));
     if(d.lt_trip_end)localStorage.setItem("lt_trip_end",JSON.stringify(d.lt_trip_end));else localStorage.removeItem("lt_trip_end");
+    localStorage.setItem("lt_sel_provs",JSON.stringify(d.lt_sel_provs||[]));
     localStorage.setItem("lt_ci",JSON.stringify(d.lt_ci||{}));
     localStorage.setItem("lt_history",JSON.stringify(d.lt_history||{}));
     if(d.lt_cfg)localStorage.setItem("lt_cfg",JSON.stringify(d.lt_cfg));
     if(d.lt_mode)localStorage.setItem("lt_mode",d.lt_mode);
     if(d.lt_max)localStorage.setItem("lt_max",String(d.lt_max));
+    if(d.lt_max_km)localStorage.setItem("lt_max_km",String(d.lt_max_km));
     if(d.lt_src)localStorage.setItem("lt_src",d.lt_src);
     if(d.lt_start_date)localStorage.setItem("lt_start_date",d.lt_start_date);
     localStorage.setItem("lt_skip_off",d.lt_skip_off?"1":"0");
@@ -2076,358 +2281,3 @@ window.addEventListener("resize",()=>setTimeout(()=>lmap.invalidateSize(),150));
 
 function refreshAll(){buildSchedule();renderUI();renderMap();loadDayExtras();}
 refreshAll();
-
-// ══════════════════════════════════════════════════════════════
-// APP PATCH V2 — Safe: Không override hàm gốc
-// Dán vào CUỐI app_1.js (sau dòng refreshAll() cuối cùng)
-// ══════════════════════════════════════════════════════════════
-
-// ── 1. Province Filter ──────────────────────────────────────
-(function() {
-  "use strict";
-
-  // State riêng, an toàn với const st
-  const patchState = {
-    selProvs: JSON.parse(localStorage.getItem("lt_sel_provs") || "[]"),
-    bnavTab: "list",
-    wxCache: {}
-  };
-
-  function saveProvs() {
-    localStorage.setItem("lt_sel_provs", JSON.stringify(patchState.selProvs));
-  }
-
-  function getAllProvs() {
-    return [...new Set((st.raw.shops || []).map(s => s.province).filter(Boolean))].sort((a,b) => a.localeCompare(b,"vi"));
-  }
-
-  window.patchToggleProv = function(prov) {
-    const i = patchState.selProvs.indexOf(prov);
-    if (i >= 0) patchState.selProvs.splice(i, 1);
-    else patchState.selProvs.push(prov);
-    saveProvs();
-    renderProvBar();
-    renderScheduleList(); // Chỉ re-render list, không rebuild schedule
-  };
-
-  window.patchClearProv = function() {
-    patchState.selProvs = [];
-    saveProvs();
-    renderProvBar();
-    renderScheduleList();
-  };
-
-  // ── 2. Province Filter Bar ────────────────────────────────
-  function renderProvBar() {
-    const bar = document.getElementById("prov-filter-bar");
-    if (!bar) return;
-    const provs = getAllProvs();
-    if (provs.length <= 1) { bar.style.display = "none"; return; }
-    bar.style.display = "flex";
-
-    const total = (st.schedule || []).length;
-    let h = `<button class="prov-chip${patchState.selProvs.length === 0 ? " active" : ""}" onclick="patchClearProv()">
-      🌏 Tất cả <span class="chip-cnt">${total}</span>
-    </button>`;
-    provs.forEach(p => {
-      const cnt = (st.schedule || []).filter(s => s.province === p).length;
-      if (!cnt) return;
-      const act = patchState.selProvs.includes(p);
-      h += `<button class="prov-chip${act?" active":""}" onclick="patchToggleProv(${JSON.stringify(p)})">
-        ${escHtml(p)} <span class="chip-cnt">${cnt}</span>
-      </button>`;
-    });
-    bar.innerHTML = h;
-  }
-
-  // ── 3. Filtered schedule list (không thay renderUI) ───────
-  function getFilteredStops() {
-    let list = [];
-    if (st.sel_day === 0) list = st.schedule || [];
-    else list = (st.schedule || []).filter(s => s.day === st.sel_day);
-    if (patchState.selProvs.length > 0)
-      list = list.filter(s => patchState.selProvs.includes(s.province));
-    return list;
-  }
-
-  function renderScheduleList() {
-    // Chỉ filter visible list, không touch day tabs hay stats
-    const listEl = document.getElementById("schedule-list");
-    if (!listEl || patchState.selProvs.length === 0) return;
-    // Ẩn các card không thuộc tỉnh đang filter
-    const cards = listEl.querySelectorAll("[data-name]");
-    cards.forEach(card => {
-      const name = card.getAttribute("data-name");
-      const shop = (st.schedule || []).find(s => s.name === name);
-      if (!shop) return;
-      card.style.display = patchState.selProvs.includes(shop.province) ? "" : "none";
-    });
-  }
-
-  // ── 4. Bottom Nav Bar ─────────────────────────────────────
-  function renderBnav() {
-    const bn = document.getElementById("bottom-nav");
-    if (!bn) return;
-    const t = patchState.bnavTab;
-    const dot = st.needs_reopt ? ' <span class="bnav-dot show"></span>' : '';
-    bn.innerHTML = `
-      <button class="bnav-item${t==="map"?" active":""}" onclick="patchBnav('map')">
-        <span class="bnav-icon">🗺️</span>Bản đồ
-      </button>
-      <button class="bnav-item${t==="list"?" active":""}" onclick="patchBnav('list')">
-        <span class="bnav-icon">📋</span>Lịch trình
-      </button>
-      <button class="bnav-item${t==="add"?" active":""}" onclick="patchBnav('add')">
-        <span class="bnav-icon">➕</span>Thêm
-      </button>
-      <button class="bnav-item bnav-opt${t==="opt"?" active":""}" onclick="patchBnav('opt')">
-        <span class="bnav-icon">⚡</span>Tối ưu${dot}
-      </button>
-      <button class="bnav-item${t==="cfg"?" active":""}" onclick="patchBnav('cfg')">
-        <span class="bnav-icon">⚙️</span>Cài đặt
-      </button>`;
-  }
-
-  window.patchBnav = function(tab) {
-    patchState.bnavTab = tab;
-    if (tab === "map") {
-      document.body.classList.remove("map-collapsed");
-      document.body.classList.add("map-expanded");
-      setTimeout(() => { if(typeof lmap!=="undefined") lmap.invalidateSize(); }, 220);
-    } else if (tab === "list") {
-      document.body.classList.remove("map-expanded","map-collapsed");
-      setTimeout(() => { if(typeof lmap!=="undefined") lmap.invalidateSize(); }, 220);
-    } else if (tab === "add") {
-      if (typeof openPointDialog === "function") openPointDialog("shop");
-    } else if (tab === "opt") {
-      if (typeof openOptimize === "function") openOptimize();
-    } else if (tab === "cfg") {
-      if (typeof openSettings === "function") openSettings();
-    }
-    renderBnav();
-  };
-
-  // ── 5. Area chips trong opt-dialog ───────────────────────
-  // Inject area chips vào opt-dialog khi mở — MO: observe DOM
-  function injectAreaChips() {
-    const dlgBody = document.querySelector("#opt-dialog .modal-body, #opt-dialog .dlg-body");
-    if (!dlgBody || dlgBody.querySelector(".area-chips")) return;
-    const provs = getAllProvs();
-    if (provs.length <= 1) return;
-    const wrap = document.createElement("div");
-    wrap.className = "field";
-    wrap.innerHTML = `<label>🗂️ Chọn khu vực cần tối ưu (bỏ chọn để bỏ qua)</label>
-      <div class="area-chips" id="opt-area-chips">
-        ${provs.map(p => {
-          const checked = patchState.selProvs.length === 0 || patchState.selProvs.includes(p);
-          return `<label class="area-chip${checked?" chk":""}">
-            <input type="checkbox" ${checked?"checked":""} value="${escHtml(p)}"
-              onchange="this.closest('.area-chip').classList.toggle('chk',this.checked)"/>
-            ${escHtml(p)}
-          </label>`;
-        }).join("")}
-      </div>`;
-    // Chèn trước phần footer
-    const foot = dlgBody.querySelector(".modal-footer, .dlg-foot") || null;
-    dlgBody.insertBefore(wrap, foot || null);
-    // Compare wrap
-    if (!dlgBody.querySelector("#opt-compare-wrap")) {
-      const cw = document.createElement("div");
-      cw.id = "opt-compare-wrap"; cw.style.display = "none";
-      dlgBody.prepend(cw);
-    }
-  }
-
-  // Observe opt-dialog open
-  const optDlg = document.getElementById("opt-dialog");
-  if (optDlg) {
-    new MutationObserver(() => {
-      if (optDlg.classList.contains("open") || optDlg.open) {
-        setTimeout(injectAreaChips, 60);
-      }
-    }).observe(optDlg, { attributes: true, attributeFilter: ["class", "open"] });
-  }
-
-  // ── 6. Lấy khu vực được chọn từ chips ──────────────────
-  window.patchGetCheckedAreas = function() {
-    const chips = document.querySelectorAll("#opt-area-chips input[type=checkbox]");
-    if (!chips.length) return [];
-    const all = getAllProvs();
-    const checked = [...chips].filter(c => c.checked).map(c => c.value);
-    return checked.length === all.length ? [] : checked;
-  };
-
-  // ── 7. Hook sau khi runOptimize xong (compare UI) ───────
-  // Dùng MutationObserver để detect khi opt-info thay đổi
-  const optInfoEl = document.getElementById("opt-info");
-  let beforeKm = 0, beforeDays = 0;
-
-  // Capture state trước khi optimize
-  if (optInfoEl) {
-    new MutationObserver((muts) => {
-      muts.forEach(m => {
-        if (m.type === "childList" || m.type === "characterData") {
-          const text = optInfoEl.textContent || "";
-          // Detect khi opt bắt đầu (text reset về mặc định)
-          if (text.includes("Chọn") || text.includes("so sánh")) {
-            beforeKm = (st.schedule || []).reduce((s,x) => s+(x.distKm||0), 0);
-            beforeDays = (st.schedule || []).reduce((m,x) => Math.max(m,x.day), 0);
-          }
-        }
-      });
-    }).observe(optInfoEl, { childList: true, subtree: true, characterData: true });
-  }
-
-  // Monkey-patch runOptimize safely: wrap sau khi app load
-  window.addEventListener("load", () => {
-    // Capture areas trước khi optimize chạy
-    const origRun = window.runOptimize;
-    if (typeof origRun === "function") {
-      window.runOptimize = async function() {
-        // Capture before state
-        beforeKm = (st.schedule || []).reduce((s,x) => s+(x.distKm||0), 0);
-        beforeDays = (st.schedule || []).reduce((m,x) => Math.max(m,x.day), 0);
-        // Lấy khu vực checked
-        const areas = patchGetCheckedAreas();
-        // Nếu có filter khu vực → áp dụng vào opt-only-due workaround
-        if (areas.length > 0) {
-          // Tạm filter st.raw.shops để optimize, khôi phục sau
-          const allShops = st.raw.shops.slice();
-          // Chỉ optimize shops trong area, giữ shop ngoài area nguyên vị trí
-          const inArea = allShops.filter(s => areas.includes(s.province));
-          const outArea = allShops.filter(s => !areas.includes(s.province));
-          // Inject order gợi ý: out trước, in sau (sẽ được NN+2opt optimize)
-          if (outArea.length && inArea.length) {
-            st.raw.shops = [...outArea, ...inArea];
-          }
-          await origRun.apply(this, arguments);
-          st.raw.shops = allShops; // Khôi phục
-        } else {
-          await origRun.apply(this, arguments);
-        }
-        // Render compare UI
-        const afterKm = (st.schedule || []).reduce((s,x) => s+(x.distKm||0), 0);
-        const afterDays = (st.schedule || []).reduce((m,x) => Math.max(m,x.day), 0);
-        const saved = beforeKm - afterKm;
-        const pct = beforeKm > 0 ? Math.round((saved/beforeKm)*100) : 0;
-        const cw = document.getElementById("opt-compare-wrap");
-        if (cw) {
-          cw.style.display = "block";
-          cw.innerHTML = saved > 0.5
-            ? `<div class="opt-saving">
-                <span>💚 Tiết kiệm ~${Math.abs(saved).toFixed(1)} km</span>
-                <span class="save-pct">${pct}%</span>
-               </div>
-               <div class="opt-compare">
-                 <div class="opt-box">
-                   <div class="ob-label">TRƯỚC</div>
-                   <div class="ob-km">${beforeKm.toFixed(0)} km</div>
-                   <div class="ob-sub">${beforeDays} ngày</div>
-                 </div>
-                 <div class="opt-arrow">→</div>
-                 <div class="opt-box after">
-                   <div class="ob-label">SAU TỐI ƯU ✅</div>
-                   <div class="ob-km">${afterKm.toFixed(0)} km</div>
-                   <div class="ob-sub">${afterDays} ngày</div>
-                 </div>
-               </div>`
-            : `<div class="opt-info" style="margin:0 0 10px;">✅ Tuyến đã tối ưu, không thay đổi đáng kể.</div>`;
-        }
-        // Cập nhật province filter nếu user chọn khu vực cụ thể
-        if (areas.length > 0) {
-          patchState.selProvs = areas;
-          saveProvs();
-        }
-        renderProvBar();
-        renderBnav();
-      };
-    }
-  });
-
-  // ── 8. Weather badges (async, không block UI) ────────────
-  async function injectWxBadges() {
-    if (typeof fetchDayWeather !== "function") return;
-    const today = typeof toLocalIso === "function" ? toLocalIso() : new Date().toISOString().slice(0,10);
-    const visible = patchState.selProvs.length > 0
-      ? (st.schedule||[]).filter(s => patchState.selProvs.includes(s.province))
-      : (st.sel_day === 0 ? (st.schedule||[]) : (st.schedule||[]).filter(s=>s.day===st.sel_day));
-    for (const s of visible.slice(0, 8)) { // Giới hạn 8 để tránh spam API
-      const cal = st.day_calendar && st.day_calendar[s.day];
-      const iso = cal?.iso || today;
-      let el = document.querySelector(`.shop-card [data-wx="${s.name}"]`);
-      if (!el) continue;
-      if (el.dataset.loaded === "1") continue;
-      try {
-        const wx = await fetchDayWeather(s.lat, s.lon, iso, 8, 17);
-        if (!wx) continue;
-        const rain = wx.rain >= 50;
-        el.innerHTML = `<span class="wx-badge${rain?" rain":""}">
-          ${wx.icon} ${wx.text} ${wx.tMin}–${wx.tMax}°C${wx.rain>0?` · 🌧️${wx.rain}%`:""}
-        </span>`;
-        el.dataset.loaded = "1";
-      } catch(e) {}
-    }
-  }
-
-  // ── 9. Inject vào renderUI gốc qua postRender hook ───────
-  // Thêm data-name vào cards (cần thiết cho province filter)
-  // và data-wx placeholder cho weather
-  function postRender() {
-    // Thêm data-name vào cards nếu chưa có
-    document.querySelectorAll(".shop-card:not([data-name])").forEach(card => {
-      const strong = card.querySelector(".shop-info strong, .shop-name");
-      if (!strong) return;
-      const name = strong.textContent.trim();
-      const shop = (st.schedule||[]).find(s => s.name === name);
-      if (!shop) return;
-      card.setAttribute("data-name", name);
-      // Thêm freq badge
-      const vs = typeof getVisitStatus === "function" ? getVisitStatus(getShopMeta(name)||shop) : null;
-      if (vs) {
-        let badges = card.querySelector(".card-badges");
-        if (!badges) {
-          badges = document.createElement("div");
-          badges.className = "card-badges";
-          const info = card.querySelector(".shop-info,.shop-meta");
-          if (info) info.appendChild(badges);
-        }
-        if (!badges.querySelector(".freq-badge")) {
-          const fb = document.createElement("span");
-          fb.className = `freq-badge ${vs.cls||"ok"}`;
-          fb.textContent = `🔄 ${vs.label}`;
-          badges.appendChild(fb);
-        }
-        // Weather placeholder
-        if (!badges.querySelector("[data-wx]")) {
-          const wb = document.createElement("span");
-          wb.setAttribute("data-wx", name);
-          wb.className = "wx-badge";
-          wb.textContent = "⏳ Thời tiết...";
-          badges.appendChild(wb);
-        }
-      }
-    });
-    renderProvBar();
-    renderBnav();
-    renderScheduleList();
-    // Load weather async
-    setTimeout(injectWxBadges, 400);
-  }
-
-  // ── 10. Hook vào refreshAll ────────────────────────────────
-  const origRefreshAll = typeof refreshAll === "function" ? refreshAll : null;
-  if (origRefreshAll) {
-    window.refreshAll = function() {
-      origRefreshAll.apply(this, arguments);
-      postRender();
-    };
-  }
-
-  // Init
-  setTimeout(() => {
-    postRender();
-    renderProvBar();
-    renderBnav();
-  }, 300);
-
-})(); // End IIFE

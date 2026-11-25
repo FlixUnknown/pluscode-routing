@@ -41,8 +41,8 @@
 
   <div id="side-panel">
     <div class="day-tabs" id="day-tabs"></div>
-  <div id="prov-filter-bar" style="display:none;flex;gap:6px;overflow-x:auto;padding:6px 12px;background:var(--bg);border-bottom:1px solid var(--bdr);flex-shrink:0;"></div>
     <div class="day-meta-bar" id="day-meta-bar"></div>
+    <div class="prov-filter-bar" id="prov-filter-bar" style="display:none;"></div>
 
     <div class="search-bar">
       <div class="search-wrap">
@@ -69,6 +69,8 @@
     <div class="list" id="schedule-list"></div>
   </div>
 </div>
+
+<nav id="bottom-nav" class="bottom-nav" role="navigation" aria-label="Điều hướng chính"></nav>
 
 <div id="toast" class="toast"></div>
 <div id="drop-overlay" class="drop-overlay">📂 Thả file Excel (.xlsx) vào đây để nạp</div>
@@ -296,8 +298,8 @@
       <div class="field">
         <label>Phương tiện mặc định</label>
         <select id="cfg-mode" onchange="onCfgModeChange()">
-          <option value="xemay">🛵 Xe máy (35 km/h · 4 điểm/ngày)</option>
-          <option value="oto">🚗 Ô tô (40 km/h · 6 điểm/ngày)</option>
+          <option value="xemay">🛵 Xe máy (35 km/h · max 4 điểm · 90 km/ngày)</option>
+          <option value="oto">🚗 Ô tô (40 km/h · max 6 điểm · 165 km/ngày)</option>
         </select>
       </div>
       <div class="coord-row">
@@ -306,8 +308,18 @@
           <input id="cfg-max" type="number" inputmode="numeric" min="1" max="20"/>
         </div>
         <div class="field">
+          <label>Km tối đa / ngày</label>
+          <input id="cfg-max-km" type="number" inputmode="numeric" min="10" max="500"/>
+        </div>
+      </div>
+      <div class="coord-row">
+        <div class="field">
           <label>Phút ghé mặc định</label>
           <input id="cfg-svc" type="number" inputmode="numeric" min="5" max="180"/>
+        </div>
+        <div class="field">
+          <label>Ngày bắt đầu đi</label>
+          <input id="cfg-start-date" type="date"/>
         </div>
       </div>
       <div class="coord-row">
@@ -329,10 +341,6 @@
           <label>Đến</label>
           <input id="cfg-le" type="time"/>
         </div>
-      </div>
-      <div class="field">
-        <label>Ngày bắt đầu đi</label>
-        <input id="cfg-start-date" type="date"/>
       </div>
       <div class="field">
         <label>Cách gửi điểm sang Google Maps</label>
@@ -362,7 +370,8 @@
       <button type="button" class="dlg-close" onclick="closeDlg('opt-dialog')">✕</button>
     </div>
     <div class="dlg-body">
-      <div class="opt-info" id="opt-info">Chọn điểm xuất phát, điểm kết thúc & số ngày mong muốn để phân tích phương án tối ưu.</div>
+      <div class="opt-info" id="opt-info">Chọn điểm xuất phát, điểm kết thúc & khu vực để phân tích 3 phương án tối ưu.</div>
+      <div id="opt-compare-wrap" style="display:none;"></div>
       <div class="coord-row">
         <div class="field">
           <label>Điểm xuất phát</label>
@@ -395,6 +404,10 @@
           </select>
         </div>
       </div>
+      <div class="field" id="opt-area-wrap" style="display:none;">
+        <label>🗂️ Chọn khu vực Tỉnh cần tối ưu</label>
+        <div class="area-chips" id="opt-area-chips"></div>
+      </div>
       <div class="field">
         <label class="chk-inline">
           <input type="checkbox" id="opt-only-due"/> Chỉ lập tuyến cho các điểm Đến / Quá hạn
@@ -426,8 +439,5 @@
 
 <script src="extras.js"></script>
 <script src="app.js"></script>
-
-<nav id="bottom-nav" class="bottom-nav" role="navigation" aria-label="Điều hướng chính"></nav>
-  <script src="app_patch_v2.js"></script>
 </body>
 </html>
